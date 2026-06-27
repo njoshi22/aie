@@ -39,3 +39,7 @@ next-env.d.ts
 __pycache__/
 *.pyc
 .venv/
+
+# revmem local approval store (scaffold)
+.revmem_approvals.json
+.revmem_approvals.json.lock
