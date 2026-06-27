@@ -1,0 +1,15 @@
+{
+  "deal_id": "DEAL-001",
+  "customer": "Acme Corp",
+  "product": "Enterprise Platform",
+  "seats": 1000,
+  "tcv_usd": 450000,
+  "term_years": 3,
+  "annual_schedule_usd": [150000, 150000, 150000],
+  "discount_pct": 10,
+  "y1_monthly_invoice_usd": 8333.00,
+  "stage": "Closed Won",
+  "close_date": "2026-06-15",
+  "owner": "Bob Johnson, Account Executive",
+  "last_updated": "2026-06-10"
+}

@@ -1,0 +1,41 @@
+{
+  "name": "Delegation of Authority — Contract Reconciliation",
+  "version": 1,
+  "rules": [
+    {
+      "id": "DOA-001",
+      "description": "Immaterial rounding differences",
+      "condition": {"max_diff_usd": 1},
+      "action": "auto_dismiss",
+      "route_to": null
+    },
+    {
+      "id": "DOA-002",
+      "description": "Minor corrections under $1K",
+      "condition": {"min_diff_usd": 1, "max_diff_usd": 1000},
+      "action": "auto_resolve",
+      "route_to": "am"
+    },
+    {
+      "id": "DOA-003",
+      "description": "Moderate discrepancies or schedule changes",
+      "condition": {"min_diff_usd": 1000, "max_diff_usd": 50000, "change_types": ["schedule_change", "term_change"]},
+      "action": "escalate",
+      "route_to": "controller"
+    },
+    {
+      "id": "DOA-004",
+      "description": "Large discrepancies over $50K",
+      "condition": {"min_diff_usd": 50000},
+      "action": "escalate",
+      "route_to": "cfo"
+    },
+    {
+      "id": "DOA-005",
+      "description": "Discount exceeds deal desk authority (max 20%)",
+      "condition": {"change_types": ["discount_over_authority"]},
+      "action": "escalate",
+      "route_to": "cfo_cco"
+    }
+  ]
+}

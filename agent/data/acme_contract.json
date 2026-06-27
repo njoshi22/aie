@@ -1,0 +1,15 @@
+{
+  "deal_id": "DEAL-001",
+  "customer": "Acme Corp",
+  "product": "Enterprise Platform",
+  "seats": 1000,
+  "tcv_usd": 450000,
+  "term_years": 3,
+  "annual_schedule_usd": [100000, 150000, 200000],
+  "discount_pct": 10,
+  "y1_monthly_invoice_usd": 8333.33,
+  "payment_terms": "Net 30",
+  "effective_date": "2026-07-01",
+  "signed_by": "Jane Smith, VP Procurement",
+  "notes": "Ramped pricing approved by deal desk. Year 1 reduced rate to accelerate adoption."
+}
