@@ -214,10 +214,10 @@ Retrieves the ramp memory → **ignores the rounding, catches the ramp, escalate
 **Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.5 → **ANALYST**.
 
 ### Session 3 — LIVE, new Globex contract (rep ~0.5, ANALYST)
-Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $360k matches again). The lesson **generalizes** (keyed on `deal_type`, not Acme's numbers). At ANALYST tier the agent **auto-reconciles the ramp into CRM itself**.
+Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $360k matches again). The lesson **generalizes** (keyed on `deal_type`, not Acme's numbers). The agent **silently dismisses the immaterial rounding** (an ANALYST capability it lacked as OBSERVER), catches the ramp, escalates it with a recommended correction, and — on **live approval** (presenter clicks Approve) — **executes the CRM write itself** (the new ANALYST permission: OBSERVER could only flag, never touch the CRM).
 **Live flourish:** edit the governance boundary on stage ($1k → $5k threshold) and re-run to show routing shift in real time.
-**Optional judgment twist:** Globex contract has a 25% discount vs deal-desk max 20% → agent auto-fixes the ramp **but correctly escalates the over-authority discount**.
-**Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.65 → **AUTONOMOUS**.
+**Optional judgment twist:** Globex contract has a 25% discount vs deal-desk max 20% → agent reconciles the ramp **but correctly escalates the over-authority discount** to the CFO.
+**Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.65 → **AUTONOMOUS** (next deal, it could reconcile policy-covered fixes unattended).
 
 Reputation track: **0.1 → 0.2 → 0.5 → 0.65** · tiers **OBSERVER → OBSERVER → ANALYST → AUTONOMOUS**.
 

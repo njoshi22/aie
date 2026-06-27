@@ -1,10 +1,10 @@
 # RevMem – Governed, Self-Improving Agent Memory & Context Layer for Finance & RevOps
 
-**Hackathon Project Spec**  
-**Theme**: Continual Learning (Primary) + Self-Improvement Stack elements  
-**Special Prize Focus**: Best Usage of Gemini 3.5
+**Hackathon Project Spec — AI Engineer World's Fair 2026**
+**Themes**: Continual Learning (primary) + The Self-Improvement Stack
+**Special prizes targeted**: Best Usage of Gemini 3.5 ($5k) · Best Usage of DigitalOcean
 
-**Date**: June 27, 2026  
+**Date**: June 27, 2026
 **Team Strengths**: Finance/RevOps/Legal domain expertise + Data Science (modeling, feedback systems)
 
 ---
@@ -13,177 +13,166 @@
 
 **RevMem** (RevOps Memory Layer)
 
-A governed, self-improving memory and context infrastructure layer that enables autonomous AI agents to continuously improve at finance and revops workflows (billing, contract reconciliation, pipeline management, fee analysis) with built-in identity, trust scoring, and auditability.
+The governed memory + reputation layer that sits on top of a Gemini Managed Agent and makes its cross-session autonomy *safe* for finance — so an autonomous agent reconciling signed contracts against the CRM gets measurably better, and earns broader permissions, the more it is used.
 
 ---
 
 ## 2. Problem Statement
 
-Finance and revops teams want to deploy autonomous agents for high-value work, but face critical blockers:
+Finance and RevOps teams want to deploy autonomous agents for high-value work, but face critical blockers:
 
-- Agents forget context and domain knowledge across sessions
+- Agents forget domain knowledge across sessions and re-make the same mistakes
 - They require constant human re-explaining of rules, history, and patterns
-- Lack of verifiable identity, evolving trust/reputation, and governance makes enterprises unwilling to let agents act on real systems
-- There is no reliable way for agents to improve over time in production without heavy oversight
+- Lack of verifiable identity, evolving trust, and governance makes enterprises unwilling to let agents act on real systems (CRM, billing, ERP)
+- There is no reliable way for an agent to improve in production without heavy oversight
 
-This prevents the agent economy from scaling in regulated, high-stakes domains like finance and revops.
-
-Existing memory tools are too generic and lack the governance, auditability, and finance-specific continual learning loops required by real teams.
+Existing memory tools are too generic and lack the governance, auditability, and finance-specific continual-learning loops real teams need.
 
 ---
 
 ## 3. Solution Overview
 
-**RevMem** is middleware infrastructure that provides:
+**RevMem** is middleware that provides:
 
-- Persistent, structured memory optimized for finance/revops concepts
-- Self-improving mechanisms so the layer gets better at surfacing relevant context and adjusting permissions the more it is used
-- Identity + reputation system so agents progressively earn trust and broader permissions
-- Full auditability and governance for compliance-heavy environments
+- Persistent, structured memory optimized for finance/RevOps concepts (contracts, pricing, approval policy)
+- Self-improving retrieval that gets better at surfacing relevant context based on past outcomes
+- An identity + reputation system so agents progressively earn trust and broader permissions
+- Adaptive governance: a policy-driven approval-routing boundary, separate from earned autonomy
+- Full auditability for compliance-heavy environments
 
-Agents connect to RevMem and become more capable over time with minimal human intervention — directly fulfilling the **Continual Learning** theme.
-
----
-
-## 4. Key Features (MVP)
-
-| Feature                     | Description                                                                             | Continual Learning Benefit                        |
-| --------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Structured Finance Memory   | Hybrid graph + vector store for billing rules, contracts, pipeline events, fee patterns | Consolidates observations into reusable knowledge |
-| Self-Improving Retrieval    | Reranks and refines context based on past task outcomes                                 | Learns what context actually helps                |
-| Agent Identity & Reputation | Verifiable credentials + dynamic reputation score based on observed behavior            | Reputation grows with demonstrated competence     |
-| Adaptive Governance         | Permission scope that expands or contracts based on reputation and task type            | Self-adjusting trust boundaries                   |
-| Audit & Observability       | Complete trace of memory usage, decisions, and outcomes                                 | Enables evaluation of learning quality            |
-| Feedback & Reflection       | Structured loop for outcomes and signals to update memory and reputation                | Core mechanism for continuous improvement         |
+A Gemini Managed Agent connects to RevMem and becomes more capable over time with minimal human intervention — directly fulfilling the **Continual Learning** theme, while RevMem itself is **Self-Improvement-Stack** infrastructure.
 
 ---
 
-## 5. Technical Architecture
+## 4. Focused Use Case (the demo)
+
+A new customer is signed and sends over the **finalized, signed contract**. An autonomous agent must:
+
+1. **Parse** the order form into a normalized pricing table
+2. **Reconcile** every pricing field against the CRM record (mock Salesforce)
+3. **Route** each discrepancy to the correct approver per the org's delegation-of-authority policy (AM → Controller → CFO/CCO by materiality)
+4. **On approval**, reconcile the CRM to the signed contract (the contract is the source of truth)
+
+**Without RevMem** (cold): the agent compares totals, sees TCV matches, declares success — missing a subtle ramp-schedule mismatch — while over-escalating an immaterial rounding artifact.
+
+**With RevMem** (warm): it retrieves the lesson learned from that exact mistake — *"TCV parity isn't enough; reconcile the annual schedule"* — ignores the noise, catches the material item, and routes it accurately. Reputation rises; permissions expand.
+
+---
+
+## 5. Key Features (MVP)
+
+| Feature | Description | Continual-Learning Benefit |
+|---------|-------------|-----------------------------|
+| Structured Finance Memory | MongoDB Atlas (document + vector) schema for pricing rules, contract terms, materiality thresholds | Consolidates observations into reusable knowledge |
+| Self-Improving Retrieval | Atlas Vector Search reranked by reputation-weighted relevance (`α·cosine + β·relevance + γ·recency`) | Learns what context actually helps |
+| Agent Identity & Reputation | Dynamic reputation score from observed reconciliation outcomes | Reputation grows with demonstrated competence |
+| Adaptive Governance | Policy-driven approver routing + permission tiers that expand with reputation | Self-adjusting trust boundaries |
+| Audit & Observability | Trace of memory usage, routing decisions, and outcomes | Enables evaluation of learning quality |
+| Feedback & Reflection | Outcome logging that updates memory relevance + reputation | Core mechanism for continuous improvement |
+
+---
+
+## 6. Technical Architecture
 
 **Core Components**:
 
-- **Memory Store**: Hybrid (graph relationships + vector embeddings). Finance-specific schema (`BillingRule`, `ContractClause`, `PipelineEvent`, `FeePattern`).
-- **Context Engine**: Retrieval + outcome-based reranking layer.
-- **Reputation & Identity Module**: Credential issuance + reputation updater driven by observed success/failure.
-- **Governance Engine**: Rule engine that maps reputation + task type → allowed actions.
-- **Interface Layer**: Simple API (REST or MCP-style) for agents to interact with memory, reputation, and permissions.
-- **Observability Layer**: Logging of retrievals, decisions, and results.
+- **Agent Runtime**: Gemini **Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via the Interactions API. Stateful sessions via environment ID; skills declared in `AGENTS.md` / `SKILL.md`.
+- **Memory Store**: MongoDB Atlas — documents + Vector Search in one managed store.
+- **Context Engine**: vector retrieval + outcome-based reranking.
+- **Reputation & Identity Module**: reputation updater driven by observed success/failure; permission-tier mapping.
+- **Governance Engine**: policy → approver routing; reputation tier → allowed tools; per-session `SKILL.md` generation.
+- **Interface Layer**: FastAPI on DigitalOcean App Platform — tools the hosted agent calls.
+- **UI**: React + Vite — a live agent-working view (the main feature), with reputation/routing overlays embedded.
 
 **Data Flow**:
-Agent performs action (via Computer Use) → Observation logged to RevMem → Memory updated + context quality scored → Reputation adjusted → Future retrievals and permissions improve automatically.
+Agent receives signed contract → calls RevMem tools (retrieve context, reconcile, route) → outcome logged → memory relevance + reputation updated → future retrievals and permissions improve automatically.
 
 ---
 
-## 6. Gemini 3.5 Integration (Prize Path)
+## 7. Gemini 3.5 Integration (Prize Path)
 
-- **Managed Agents (Antigravity)**: Primary agent runtime with stateful sessions via environment ID.
-- **Computer Use (Gemini 3.5 Flash)**: Agents visually interact with mock finance/revops UIs. Observations feed directly into RevMem’s memory and reputation systems.
-- **Skills Definition**: Use `AGENTS.md` and `SKILL.md` to define a “RevOps Finance Agent” whose capabilities expand as reputation grows.
-- **Stateful Improvement Loop**: Environment ID + RevMem together create visible cross-session learning.
+**Managed Agents (Antigravity)** is the core runtime, not a stretch goal:
 
-This setup directly demonstrates “agentic workflows that improve themselves over time.”
+- **Interactions API**: spin up a hosted autonomous agent that reasons and executes natively in an isolated Google-hosted environment.
+- **Stateful Memory**: pass the environment ID forward to resume sessions with state intact — the runtime substrate for cross-session learning.
+- **Skills Definition**: `AGENTS.md` + `SKILL.md` declare the "RevOps Finance Agent" persona; RevMem regenerates a **tier-scoped `SKILL.md`** each session so capabilities visibly expand as reputation grows.
 
----
-
-## 7. Demo Scenario & User Flow
-
-**Scenario**: A finance/revops agent is tasked with detecting fee leakage and updating pipeline status across multiple sessions.
-
-**Demo Flow**:
-
-1. **Session 1 (Cold Start)**: Agent explores mock billing/contract UI via Computer Use. Stores many low-value memories. Low reputation. Limited permissions.
-2. **Outcome Logging**: System records success/failure on specific actions. RevMem consolidates useful patterns.
-3. **Session 2+**: Agent resumes with state. RevMem surfaces higher-quality context. Agent performs better and faster. Reputation increases → permissions expand.
-4. **Visible Improvement**: Judges see measurable progress in task success rate, relevance of retrieved context, and expanding autonomy across sessions.
-
-**MVP Scope**:
-
-- 2–3 mock finance/revops interfaces
-- Core workflow: fee leakage detection + basic pipeline actions
-- Working memory + retrieval + reputation system
-- Clear before/after improvement in 2–3 sessions
-- Simple dashboard showing memory state and reputation changes
+Two statefulness layers tell the story: Antigravity's env-ID gives raw continuity; **RevMem adds the governed, reputation-scored, policy-bounded memory layer** that makes continuity safe in finance. This is "agentic workflows that improve themselves over time" — not a wrapper chatbot.
 
 ---
 
-## 8. Continual Learning Mechanisms (Primary Theme)
+## 8. Demo Scenario & User Flow
 
-- **Memory Consolidation**: Raw observations → structured, reusable knowledge (beyond simple retrieval)
-- **Outcome-Based Adaptation**: Past task success influences future context ranking and retrieval priority
-- **Reputation-Driven Learning**: Higher reputation unlocks broader context access and looser governance
-- **Reflection Loop**: Structured summarization of what worked and what didn’t
-- **Minimal Intervention Goal**: Once initial rules and feedback mechanisms are configured, improvement compounds automatically with usage
+**Scenario**: An agent reconciles newly-signed contracts against the CRM across three sessions, getting smarter and more autonomous each time.
+
+1. **Session 1 (Cold)**: rep 0.1, OBSERVER. No memory yet → over-escalates a $0.33 rounding artifact and misses a material ramp-schedule mismatch (TCV matched, so a naive check passes). Reviewer correction → creates one experiential memory.
+2. **Session 2 (Same contract)**: rep 0.2, OBSERVER. Retrieves the lesson → ignores the noise, catches the ramp, routes it correctly. *Same permission tier* — isolating that the gain is pure context. → rep ~0.5, upgrades to ANALYST.
+3. **Session 3 (New contract, LIVE)**: rep ~0.5, ANALYST. Lesson generalizes; agent silently dismisses the immaterial noise, catches the ramp, and — on live approval — executes the CRM write itself (a permission it lacked as OBSERVER). Live flourish: edit the governance policy on stage and watch routing change in real time. → rep ~0.65, AUTONOMOUS.
+
+**Key demo moments**:
+- Quality of retrieved context improves between Session 1 and Session 2 (same input, better behavior)
+- Reputation rises and permission tier expands across sessions
+- The agent makes a smarter escalation/routing decision in later sessions
 
 ---
 
-## 9. Governance, Identity & Trust Elements
+## 9. Continual-Learning Mechanisms (Primary Theme)
 
-- Lightweight verifiable agent identity issuance
-- Dynamic reputation scoring based on observed behavior (success rate, rule compliance, efficiency)
-- Adaptive permission boundaries that evolve with reputation
+- **Memory Consolidation**: an outcome correction becomes a reusable, retrievable lesson (not raw logging)
+- **Outcome-Based Adaptation**: past success reranks future retrieval (`α·cosine + β·relevance + γ·recency`)
+- **Reputation-Driven Learning**: higher reputation unlocks broader permissions and looser governance
+- **Generalization**: lessons key on `deal_type`, so they transfer to new deals (not memorization)
+- **Minimal Intervention**: once seeded, improvement compounds with usage
+
+---
+
+## 10. Governance, Identity & Trust
+
+- Dynamic reputation scoring from observed behavior (correct catches, correct routing, no false escalations)
+- **Permission tiers** earned via reputation (what the *agent* may do unsupervised)
+- **Policy-driven approver routing** (the *org's* rules on who approves what) — a governance boundary, kept distinct from reputation
 - Complete audit trail of memory usage and decisions
-- Privacy-aware design with scoped access
-
-This directly addresses the hot “agent identity + trust” conversation on X while adding the critical continual learning/memory dimension.
 
 ---
 
-## 10. Scope for 48-Hour Hackathon (Realistic MVP)
+## 11. Scope for the Hackathon
 
 **Must Have**:
+- Atlas-backed memory store + vector retrieval with reputation reranking
+- Reputation scoring + permission tiers
+- Gemini Managed Agents (Antigravity) runtime with stateful sessions
+- Policy-driven approver routing
+- Three sessions demonstrating measurable improvement + expanding autonomy
+- React agent-working view (overlays embedded)
 
-- Working hybrid memory store + retrieval
-- Basic reputation scoring and permission system
-- Gemini Computer Use integration with mock finance UIs
-- Stateful sessions demonstrating measurable improvement
-- Simple observability dashboard
+**Nice to Have**: live policy-edit re-routing on stage; the over-authority-discount judgment twist in S3; deeper graph relationships.
 
-**Nice to Have** (stretch goals):
+**Out of Scope**: real Salesforce integration; production-grade infra; on-chain identity; multi-agent orchestration.
 
-- MCP-style interface
-- Basic graph relationships
-- More advanced reranking logic
-
-**Explicitly Out of Scope**:
-
-- Production-grade database
-- Real financial system integrations
-- Complex multi-agent orchestration
-- On-chain identity implementation
+**Banned-pattern guardrails (disqualification risk)**: no Streamlit; the dashboard is never the main feature (agent behavior is); the policy is a governance boundary, never "document ingestion" (avoids the basic-RAG trap).
 
 ---
 
-## 11. Why This Project Wins
+## 12. Why This Wins
 
-- **Excellent theme alignment**: Strong, visible Continual Learning story with clear self-improvement across sessions.
-- **Gemini 3.5 prize strength**: Creative and heavy use of Managed Agents + Computer Use to create a real improvement loop.
-- **Differentiation**: Domain-specific (finance/revops) + governance + continual learning. Not another generic memory tool.
-- **Demo impact**: Judges can clearly see agents becoming more capable at meaningful work over time.
-- **X buzz alignment**: Combines two hot areas (agent memory + identity/trust) with strong enterprise relevance.
-- **Team fit**: Leverages finance/revops/legal domain knowledge + data science strengths in modeling feedback and evaluation systems.
-
----
-
-## 12. Post-Hackathon Vision & Investor Angle
-
-**Short-term**:
-
-- Expand to full MCP server
-- Deeper graph memory
-- Additional finance schemas
-- Integration points with tools like Clarus-style systems
-
-**Long-term**:
-Become the trusted memory + governance layer that finance and revops platforms use to safely deploy fleets of agents that improve over time.
-
-**VC Narrative**:
-“The missing infrastructure layer that makes governed, continually improving agents viable in regulated finance and revops workflows. Combines two hot categories (memory infrastructure + agent identity/trust) with strong founder-market fit and clear defensibility through domain expertise.”
+- **Theme alignment**: a visible Continual-Learning story (same input → better behavior; expanding autonomy) and Self-Improvement-Stack infrastructure.
+- **Technicality (40% of judging)**: Antigravity managed agent + env-ID statefulness + Atlas vector reranking + governance/reputation engine — hard to recreate in a weekend.
+- **Gemini prize**: core, creative use of Managed Agents — not a wrapper.
+- **Differentiation**: domain-specific (finance/RevOps) + governance + continual learning. Not another generic memory tool.
+- **Demo impact**: judges see an agent become measurably more capable and more autonomous at meaningful work.
+- **Team fit**: finance/RevOps/legal domain knowledge + data-science strength in feedback and evaluation systems.
 
 ---
 
-**Document Version**: 1.0  
+## 13. Post-Hackathon Vision
+
+**Short-term**: expand to a full MCP server; deeper graph memory; additional finance schemas; substrate-agnostic memory (pluggable to mem0/Zep).
+
+**Long-term**: the trusted memory + governance layer that finance and RevOps platforms use to safely deploy fleets of agents that improve over time.
+
+**VC Narrative**: "The missing infrastructure layer that makes governed, continually improving agents viable in regulated finance and RevOps workflows — combining memory infrastructure with agent identity/trust, with strong founder-market fit."
+
+---
+
+**Document Version**: 2.0
 **Status**: Ready for hackathon execution
-
----
-
-_This spec is designed to be actionable within a 48-hour window while leaving clear room for post-event development and investor conversations._
