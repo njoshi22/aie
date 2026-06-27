@@ -1,0 +1,15 @@
+{
+  "deal_id": "DEAL-002",
+  "customer": "Globex Inc",
+  "product": "Enterprise Platform",
+  "seats": 800,
+  "tcv_usd": 360000,
+  "term_years": 3,
+  "annual_schedule_usd": [120000, 120000, 120000],
+  "discount_pct": 20,
+  "y1_monthly_invoice_usd": 6666.00,
+  "stage": "Closed Won",
+  "close_date": "2026-07-20",
+  "owner": "Sarah Lee, Account Executive",
+  "last_updated": "2026-07-15"
+}

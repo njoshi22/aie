@@ -1,0 +1,15 @@
+{
+  "deal_id": "DEAL-002",
+  "customer": "Globex Inc",
+  "product": "Enterprise Platform",
+  "seats": 800,
+  "tcv_usd": 360000,
+  "term_years": 3,
+  "annual_schedule_usd": [80000, 120000, 160000],
+  "discount_pct": 25,
+  "y1_monthly_invoice_usd": 6666.67,
+  "payment_terms": "Net 45",
+  "effective_date": "2026-08-01",
+  "signed_by": "Tom Chen, CFO",
+  "notes": "Aggressive ramp to win competitive displacement. 25% discount approved by SVP Sales."
+}

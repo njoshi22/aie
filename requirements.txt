@@ -1,5 +1,6 @@
 # RevMem dependencies (shared). Person C needs: rich, resend, fastapi, uvicorn,
 # pydantic. Person A/B: add google-genai, pymongo[srv], etc. as those land.
+google-genai>=2.10.0
 rich>=13.7
 resend>=2.0
 fastapi>=0.110
