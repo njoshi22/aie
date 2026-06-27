@@ -57,8 +57,9 @@
 ```bash
 cd revmem
 uv init --no-readme
-uv add fastapi "uvicorn[standard]" "pydantic>=2" google-genai
+uv add fastapi "uvicorn[standard]" "pydantic>=2" google-genai python-multipart
 uv add --dev pytest httpx
+# python-multipart is required by the Form(...) decision endpoint in Task 8.5
 printf "db/\n__pycache__/\n.venv/\n*.pyc\n" > .gitignore
 mkdir -p core api data tests
 touch core/__init__.py api/__init__.py
@@ -1508,7 +1509,7 @@ The CRM write must be gated on a **real approval record**, enforced server-side 
   - `Approval` model + `ApprovalStatus{PENDING,APPROVED,REJECTED}`
   - `database.insert_approval / get_approval / update_approval`
   - `governance.WriteDecision{ALLOW,NEEDS_APPROVAL,DENY}` and `governance.authorize_write(tier, discrepancy, approval_status=None) -> str`
-  - Endpoints: `POST /route_for_approval` (now creates the record + link), `GET /approvals/{id}` (served HTML), `POST /approvals/{id}/decision` (form), `POST /crm/write` (now gated by `authorize_write`)
+  - Endpoints: `POST /route_for_approval` (creates the record + link), `GET /approvals/{id}` (served HTML confirm page), `POST /approvals/{id}/decision` (form), `GET /approvals/{id}/status` (JSON — **polled by the agent** between routing and the write), `POST /crm/write` (now gated by `authorize_write`)
 
 - [ ] **Step 1: Add the Approval model (append to `core/models.py`)**
 
@@ -1718,7 +1719,7 @@ def route_for_approval(body: Discrepancy, request: Request) -> dict:
     base = os.getenv("REVMEM_BASE_URL", "")
     link = f"{base}/approvals/{approval.id}?token={approval.token}"
     print(f"[approval] route to {approver}: {link}")  # email is stubbed for the demo
-    return {"approval_id": approval.id, "route_to": approver,
+    return {"approval_id": approval.id, "token": approval.token, "route_to": approver,
             "status": approval.status, "approval_link": link}
 
 
@@ -1781,6 +1782,16 @@ def approval_decision(approval_id: str, request: Request,
     a.status = ApprovalStatus.APPROVED if decision == "approve" else ApprovalStatus.REJECTED
     a.decided_at = datetime.now(timezone.utc)
     database.update_approval(conn, a)
+    return a.model_dump(mode="json")
+
+
+@router.get("/approvals/{approval_id}/status")
+def approval_status(approval_id: str, request: Request) -> dict:
+    # JSON status — the AGENT polls this between route_for_approval and write_crm.
+    # (Person C's CLI also polls it, but only as a scaffold stand-in for the agent.)
+    a = database.get_approval(_conn(request), approval_id)
+    if not a:
+        raise HTTPException(404, "unknown approval")
     return a.model_dump(mode="json")
 ```
 

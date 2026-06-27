@@ -185,7 +185,7 @@ The financial control lives in RevMem, not the hosted agent. Flow:
 
 1. `route_for_approval(discrepancy)` → Governance picks the approver per policy, inserts a **pending `Approval`**, returns a tokenized link (email is **stubbed** for the demo — the link is printed into the CLI transcript for the presenter).
 2. The CFO opens the **single served HTML page** (`GET /approvals/{id}?token=…`) and approves/rejects (`POST /approvals/{id}/decision`).
-3. The agent polls `GET /approvals/{id}` (cooperative UX only) and then calls `write_crm`.
+3. The **agent** polls `GET /approvals/{id}/status` (JSON; cooperative UX only) and then calls `write_crm`. (Person C's CLI polls it too, but only as a scaffold stand-in until Person A's agent is wired — polling is the agent's job, not the view's.)
 4. `write_crm` calls `governance.authorize_write(tier, discrepancy, approval_status)` — the **only** thing that can mutate CRM — which returns:
 
 ```
@@ -296,8 +296,13 @@ revmem/
 │   ├── salesforce.json   # stale CRM records
 │   ├── policy.json       # DOA policy rules
 │   └── seed.py
+├── notify/               ← [Person C] email + approval stand-in
+│   ├── email.py          # Resend email (magic link) + console dry-run fallback
+│   └── approve.py        # scaffold approval endpoints mirroring Person B's contract,
+│                         #   until the RevMem API lands (then it drops out)
 ├── cli/                  ← [Person C] Rich terminal agent view (the main feature)
-│   └── app.py            # live transcript + reputation / routing overlays
+│   ├── run.py            # live transcript; drives the scaffold reconcile + approval flow
+│   └── render.py         # Rich renderables (diff table, reputation bar, routing panels)
 ├── requirements.txt
 └── README.md
 ```
@@ -327,12 +332,14 @@ revmem/
 
 > Detailed task-by-task plan: `docs/superpowers/plans/2026-06-27-revmem-person-b-core-api.md`
 
-### Person C — Agent view CLI (Rich, hour 0–16)
-1. `cli/app.py` — Rich skeleton: live agent transcript (the **main feature**) (3h)
+### Person C — Agent view CLI (Rich) + notification (hour 0–16)
+1. `cli/render.py` + `cli/run.py` — Rich live agent transcript (the **main feature**) (3h)
 2. Reputation + routing overlays embedded in the transcript (2h)
-3. Surfacing the approval link + outcome inline; S3 live-policy-edit trigger (2h)
-4. Polish, real-time refresh from the RevMem API (3h)
-5. Integration testing (2h)
+3. `notify/email.py` — single CFO approval email (Resend + dry-run fallback) (2h)
+4. `notify/approve.py` — scaffold approval endpoints mirroring Person B's contract, so the CLI runs before the API lands (2h)
+5. Polish; at integration, point `REVMEM_BASE_URL` at Person B's API and drop the stand-in (3h)
+
+> The **canonical** approval endpoints + SQLite store + `authorize_write` gate are **Person B's**. Person C owns the email, the CLI view, and the page styling. Polling the approval status is the **agent's** (Person A's) job via Person B's `/approvals/{id}/status`; the CLI polls only as a stand-in until that agent is wired.
 
 ### Everyone — last 8 hours
 | Hours | Activity |
@@ -400,8 +407,9 @@ uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
 ngrok http 8000 --domain=<your-reserved>.ngrok.app
 # Person A + CLI set REVMEM_BASE_URL to the ngrok URL
 
-# CLI agent view
-uv run python -m cli.app
+# CLI agent view (+ approval-page stand-in until Person B's API serves it)
+uv run uvicorn notify.approve:app --port 8000   # CFO approval page + status endpoint
+uv run python -m cli.run                          # the live agent transcript
 
 # Run demo sessions
 uv run python -m agent.scenarios    # Acme S1, Acme S2, Globex S3

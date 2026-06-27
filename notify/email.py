@@ -1,8 +1,8 @@
 """Compose and send the single CFO approval email (Resend).
 
 One email per session: discrepancy + recommended fix + an Approve magic link
-(-> notify.approve:/approve/{token}). Falls back to a console dry-run when
-RESEND_API_KEY is unset, so the whole flow runs without credentials.
+(-> notify.approve: GET /approvals/{id}?token=...). Falls back to a console
+dry-run when RESEND_API_KEY is unset, so the whole flow runs without credentials.
 
 Env:
     RESEND_API_KEY      resend.com api key (omit for dry-run)

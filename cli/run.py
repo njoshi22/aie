@@ -146,14 +146,14 @@ def run_session(name: str, wait: bool = True) -> None:
     if not wait:
         console.print(
             f"\n[grey70]--no-wait: approve at the link above, confirm with"
-            f"\n  curl -s http://localhost:8000/approval/{approval.token}"
-            f"\nThis run will not resume (re-running mints a new token). Use the default mode for the full gate.[/]\n"
+            f"\n  curl -s {approval.status_url()}"
+            f"\nThis run will not resume (re-running mints a new approval). Use the default mode for the full gate.[/]\n"
         )
         return
 
     try:
         with console.status("[yellow]waiting for CFO approval...[/]", spinner="dots"):
-            decided = wait_for_approval(approval.token)
+            decided = wait_for_approval(approval.id)
     except TimeoutError:
         console.print("\n[red]Approval timed out - leaving CRM unchanged.[/]\n")
         return

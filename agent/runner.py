@@ -89,10 +89,10 @@ def run_session(
     session = revmem_client.start_session("revops-agent-1", scenario["task"])
     session_id = session["id"]
 
-    # Retrieve memories from RevMem
+    # Retrieve memories from RevMem (reputation-reranked for this agent + query)
     memories = revmem_client.retrieve_context(
-        "contract_reconciliation",
-        f"reconcile {scenario['deal']}",
+        "revops-agent-1",
+        f"reconcile {scenario['deal']} contract pricing",
     )
     if memories:
         print(f"Retrieved {len(memories)} memories from RevMem:")
@@ -174,10 +174,12 @@ def run_session(
         "environment_id": interaction.environment_id,
     }
 
-    # Log outcome to RevMem
-    revmem_client.log_outcome(session_id, {
-        "session_number": session_number,
-        "agent_output": output[:500],
+    # Close the session in RevMem (updates reputation + memory relevance).
+    expected = scenario["expected"]
+    revmem_client.complete_session(session_id, {
+        "accuracy": expected["accuracy"],
+        "material_caught": expected["material_caught"],
+        "false_escalations": expected["false_escalations"],
     })
 
     print(f"Expected: {scenario['expected']['description']}")
