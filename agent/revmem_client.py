@@ -54,6 +54,13 @@ def get_agent(agent_id: str) -> dict:
     return _api_call("GET", f"/agents/{quote(agent_id)}")
 
 
+def ensure_agent(name: str) -> dict:
+    """Get-or-create the demo agent by name (idempotent). Returns the agent dict —
+    the existing agent if one with this name exists, else a freshly created one.
+    Lets each per-session run resolve the same agent and accumulate reputation."""
+    return _api_call("POST", "/agents", {"name": name})
+
+
 def get_skill_md(agent_id: str) -> str:
     """Tier-scoped SKILL.md (plain text). Empty string in stub mode."""
     if STUB_MODE:
@@ -168,23 +175,29 @@ def write_crm(
 
 # --- Stub responses (no API yet) ----------------------------------------------
 
+def _stub_agent(agent_id: str) -> dict:
+    return {
+        "id": agent_id,
+        "name": "RevOps Finance Agent",
+        "reputation_score": 0.1,
+        "total_sessions": 0,
+        "successful_sessions": 0,
+        "permission_tier": "observer",
+        "allowed_tools": [
+            "get_contract", "get_crm_record", "retrieve_context",
+            "route_for_approval", "log_outcome",
+        ],
+    }
+
+
 def _stub_response(method: str, path: str, body: dict | None = None) -> dict | list:
     """Hardcoded responses mirroring the canonical contract for offline dev."""
+    if path == "/agents":  # register: get-or-create by name
+        return _stub_agent("revops-agent-1")
     if path.startswith("/agents/") and path.endswith("/skill.md"):
         return {}
     if path.startswith("/agents/"):
-        return {
-            "id": path.rsplit("/", 1)[-1],
-            "name": "RevOps Finance Agent",
-            "reputation_score": 0.1,
-            "total_sessions": 0,
-            "successful_sessions": 0,
-            "permission_tier": "observer",
-            "allowed_tools": [
-                "get_contract", "get_crm_record", "retrieve_context",
-                "route_for_approval", "log_outcome",
-            ],
-        }
+        return _stub_agent(path.rsplit("/", 1)[-1])
 
     if path.startswith("/sessions/") and path.endswith("/complete"):
         print(f"[STUB] complete_session: {json.dumps(body)}")

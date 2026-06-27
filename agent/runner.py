@@ -16,6 +16,7 @@ from agent import revmem_client
 
 DATA_DIR = Path(__file__).parent / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
+AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-create by name
 
 
 def load_deal_data(deal_name: str) -> tuple[dict, dict, dict]:
@@ -75,8 +76,9 @@ def run_session(
 
     contract, crm, policy = load_deal_data(scenario["deal"])
 
-    # Get agent state from RevMem
-    agent_state = revmem_client.get_agent("revops-agent-1")
+    # Get-or-create the agent in RevMem (idempotent by name → stable id across runs)
+    agent_state = revmem_client.ensure_agent(AGENT_NAME)
+    agent_id = agent_state["id"]
     tier = agent_state["permission_tier"]
 
     print(f"\n{'='*60}")
@@ -86,12 +88,12 @@ def run_session(
     print(f"{'='*60}\n")
 
     # Start RevMem session
-    session = revmem_client.start_session("revops-agent-1", scenario["task"])
+    session = revmem_client.start_session(agent_id, scenario["task"])
     session_id = session["id"]
 
     # Retrieve memories from RevMem (reputation-reranked for this agent + query)
     memories = revmem_client.retrieve_context(
-        "revops-agent-1",
+        agent_id,
         f"reconcile {scenario['deal']} contract pricing",
     )
     if memories:

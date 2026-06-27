@@ -197,7 +197,7 @@ git commit -m "feat: scaffold project and core data models"
 - Produces:
   - `get_connection(path) -> sqlite3.Connection`
   - `init_db(conn) -> None`
-  - `insert_agent(conn, Agent) -> None`, `get_agent(conn, id) -> Agent | None`, `update_agent(conn, Agent) -> None`
+  - `insert_agent(conn, Agent) -> None`, `get_agent(conn, id) -> Agent | None`, `get_agent_by_name(conn, name) -> Agent | None`, `update_agent(conn, Agent) -> None`
   - `insert_memory(conn, Memory) -> None`, `get_memory(conn, id) -> Memory | None`, `list_memories(conn, agent_id, type=None) -> list[Memory]`, `update_memory(conn, Memory) -> None`
   - `insert_session(conn, Session) -> None`, `get_session(conn, id) -> Session | None`, `update_session(conn, Session) -> None`, `list_sessions(conn, agent_id=None) -> list[Session]`
   - `upsert_policy(conn, PolicyRule) -> None`, `list_policy(conn) -> list[PolicyRule]`, `get_policy(conn, id) -> PolicyRule | None`
@@ -339,6 +339,11 @@ def get_agent(conn: sqlite3.Connection, agent_id: str) -> Agent | None:
     return Agent(id=row["id"], name=row["name"], reputation_score=row["reputation_score"],
                  total_sessions=row["total_sessions"], successful_sessions=row["successful_sessions"],
                  permission_tier=row["permission_tier"], created_at=_dt(row["created_at"]))
+
+
+def get_agent_by_name(conn: sqlite3.Connection, name: str) -> Agent | None:
+    row = conn.execute("SELECT id FROM agents WHERE name=? LIMIT 1", (name,)).fetchone()
+    return get_agent(conn, row["id"]) if row else None
 
 
 def update_agent(conn: sqlite3.Connection, a: Agent) -> None:
@@ -1236,6 +1241,7 @@ def client(tmp_path, monkeypatch):
 
 def test_agent_and_skill(client):
     aid = client.post("/agents", json={"name": "A"}).json()["id"]
+    assert client.post("/agents", json={"name": "A"}).json()["id"] == aid  # idempotent by name
     got = client.get(f"/agents/{aid}").json()
     assert got["permission_tier"] == "observer"
     assert "write_crm" not in got["allowed_tools"]
@@ -1330,9 +1336,16 @@ class PolicyEdit(BaseModel):
 
 @router.post("/agents")
 def create_agent(body: CreateAgent, request: Request) -> dict:
-    a = Agent(name=body.name)
-    database.insert_agent(_conn(request), a)
-    return a.model_dump(mode="json")
+    # Idempotent register: get-or-create by name so each per-session run resolves
+    # the same agent and reputation accumulates across runs.
+    conn = _conn(request)
+    a = database.get_agent_by_name(conn, body.name)
+    if a is None:
+        a = Agent(name=body.name)
+        database.insert_agent(conn, a)
+    out = a.model_dump(mode="json")
+    out["allowed_tools"] = sorted(governance.allowed_tools(a.permission_tier))
+    return out
 
 
 @router.get("/agents/{agent_id}")
