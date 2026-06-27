@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import sqlite3
@@ -193,7 +194,11 @@ def write_crm(body: CrmWrite, request: Request) -> dict[str, Any]:
     approval_status = None
     if body.approval_id:
         appr = database.get_approval(conn, body.approval_id)
-        approval_status = appr.status if appr else None
+        # Bind approval to this specific write: foreign/mismatched approvals must not authorize it.
+        if appr and appr.deal_id == body.deal_id and appr.discrepancy == body.discrepancy:
+            approval_status = appr.status
+        else:
+            approval_status = None
     decision = governance.authorize_write(agent.permission_tier, body.discrepancy,
                                           approval_status)
     if decision != governance.WriteDecision.ALLOW:
@@ -220,15 +225,18 @@ def approval_page(approval_id: str, token: str, request: Request) -> str:
     if not a or a.token != token:
         raise HTTPException(404, "unknown approval")
     if a.status == ApprovalStatus.PENDING:
-        actions = (f'<form method="post" action="/approvals/{a.id}/decision">'
-                   f'<input type="hidden" name="token" value="{a.token}">'
+        safe_id = html.escape(a.id)
+        safe_token = html.escape(a.token)
+        actions = (f'<form method="post" action="/approvals/{safe_id}/decision">'
+                   f'<input type="hidden" name="token" value="{safe_token}">'
                    f'<button name="decision" value="approve">Approve</button> '
                    f'<button name="decision" value="reject">Reject</button></form>')
     else:
         actions = "<p><i>Decision recorded.</i></p>"
-    return _APPROVAL_HTML.format(deal_id=a.deal_id, approver_role=a.approver_role,
-                                 discrepancy=json.dumps(a.discrepancy, indent=2),
-                                 status=a.status, actions=actions)
+    return _APPROVAL_HTML.format(deal_id=html.escape(a.deal_id),
+                                 approver_role=html.escape(a.approver_role),
+                                 discrepancy=html.escape(json.dumps(a.discrepancy, indent=2)),
+                                 status=html.escape(a.status), actions=actions)
 
 
 @router.post("/approvals/{approval_id}/decision")

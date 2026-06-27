@@ -57,3 +57,25 @@ def test_full_approval_flow(client):
 
     assert client.post("/crm/write", json=body).status_code == 200  # approved → allowed
     assert client.get("/crm/acme").json()["annual_schedule"] == [100000, 150000, 200000]
+
+
+def test_approval_scope_bypass_blocked(client):
+    aid = _make_analyst(client)
+    disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
+    routed = client.post("/route_for_approval", json=disc).json()
+    approval_id = routed["approval_id"]
+    tok = routed["approval_link"].split("token=")[1]
+
+    # Approve the "acme" approval
+    client.post(f"/approvals/{approval_id}/decision", data={"decision": "approve", "token": tok})
+
+    fields = {"annual_schedule": [100000]}
+    # Using acme's approval_id to authorize a write to a DIFFERENT deal must be blocked
+    body_globex = {"agent_id": aid, "deal_id": "globex", "fields": fields,
+                   "discrepancy": disc, "approval_id": approval_id}
+    assert client.post("/crm/write", json=body_globex).status_code == 403
+
+    # The same approval still authorizes the matching "acme" write
+    body_acme = {"agent_id": aid, "deal_id": "acme", "fields": fields,
+                 "discrepancy": disc, "approval_id": approval_id}
+    assert client.post("/crm/write", json=body_acme).status_code == 200
