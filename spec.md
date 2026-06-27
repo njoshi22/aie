@@ -2,7 +2,7 @@
 
 **Hackathon Project Spec — AI Engineer World's Fair 2026**
 **Themes**: Continual Learning (primary) + The Self-Improvement Stack
-**Special prizes targeted**: Best Usage of Gemini 3.5 ($5k) · Best Usage of DigitalOcean
+**Special prize targeted**: Best Usage of Gemini 3.5 ($5k)
 
 **Date**: June 27, 2026
 **Team Strengths**: Finance/RevOps/Legal domain expertise + Data Science (modeling, feedback systems)
@@ -63,8 +63,8 @@ A new customer is signed and sends over the **finalized, signed contract**. An a
 
 | Feature | Description | Continual-Learning Benefit |
 |---------|-------------|-----------------------------|
-| Structured Finance Memory | MongoDB Atlas (document + vector) schema for pricing rules, contract terms, materiality thresholds | Consolidates observations into reusable knowledge |
-| Self-Improving Retrieval | Atlas Vector Search reranked by reputation-weighted relevance (`α·cosine + β·relevance + γ·recency`) | Learns what context actually helps |
+| Structured Finance Memory | SQLite schema for pricing rules, contract terms, materiality thresholds (embeddings stored per memory) | Consolidates observations into reusable knowledge |
+| Self-Improving Retrieval | Embedding-cosine retrieval reranked by reputation-weighted relevance (`α·cosine + β·relevance + γ·recency`) | Learns what context actually helps |
 | Agent Identity & Reputation | Dynamic reputation score from observed reconciliation outcomes | Reputation grows with demonstrated competence |
 | Adaptive Governance | Policy-driven approver routing + permission tiers that expand with reputation | Self-adjusting trust boundaries |
 | Audit & Observability | Trace of memory usage, routing decisions, and outcomes | Enables evaluation of learning quality |
@@ -77,11 +77,11 @@ A new customer is signed and sends over the **finalized, signed contract**. An a
 **Core Components**:
 
 - **Agent Runtime**: Gemini **Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via the Interactions API. Stateful sessions via environment ID; skills declared in `AGENTS.md` / `SKILL.md`.
-- **Memory Store**: MongoDB Atlas — documents + Vector Search in one managed store.
+- **Memory Store**: SQLite (single file, `db/revmem.db`) with per-memory embeddings for cosine retrieval.
 - **Context Engine**: vector retrieval + outcome-based reranking.
 - **Reputation & Identity Module**: reputation updater driven by observed success/failure; permission-tier mapping.
 - **Governance Engine**: policy → approver routing; reputation tier → allowed tools; per-session `SKILL.md` generation.
-- **Interface Layer**: FastAPI on DigitalOcean App Platform — tools the hosted agent calls.
+- **Interface Layer**: FastAPI run locally, exposed via an ngrok tunnel — tools the hosted agent calls.
 - **UI**: React + Vite — a live agent-working view (the main feature), with reputation/routing overlays embedded.
 
 **Data Flow**:
@@ -138,7 +138,7 @@ Two statefulness layers tell the story: Antigravity's env-ID gives raw continuit
 ## 11. Scope for the Hackathon
 
 **Must Have**:
-- Atlas-backed memory store + vector retrieval with reputation reranking
+- SQLite memory store + embedding-cosine retrieval with reputation reranking
 - Reputation scoring + permission tiers
 - Gemini Managed Agents (Antigravity) runtime with stateful sessions
 - Policy-driven approver routing
@@ -156,7 +156,7 @@ Two statefulness layers tell the story: Antigravity's env-ID gives raw continuit
 ## 12. Why This Wins
 
 - **Theme alignment**: a visible Continual-Learning story (same input → better behavior; expanding autonomy) and Self-Improvement-Stack infrastructure.
-- **Technicality (40% of judging)**: Antigravity managed agent + env-ID statefulness + Atlas vector reranking + governance/reputation engine — hard to recreate in a weekend.
+- **Technicality (40% of judging)**: Antigravity managed agent + env-ID statefulness + embedding-cosine reranking + governance/reputation engine — hard to recreate in a weekend.
 - **Gemini prize**: core, creative use of Managed Agents — not a wrapper.
 - **Differentiation**: domain-specific (finance/RevOps) + governance + continual learning. Not another generic memory tool.
 - **Demo impact**: judges see an agent become measurably more capable and more autonomous at meaningful work.

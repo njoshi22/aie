@@ -2,7 +2,7 @@
 
 **Hackathon: AI Engineer World's Fair 2026 · 24h · 3 people**
 **Theme: Continual Learning (primary) + Self-Improvement Stack**
-**Special prizes in reach: Best Usage of Gemini 3.5 ($5k) · Best Usage of DigitalOcean**
+**Special prize in reach: Best Usage of Gemini 3.5 ($5k)**
 
 ---
 
@@ -42,14 +42,13 @@ Demo must show only what we built during the event and clearly identify it. Repo
 | Decision | Choice | Why |
 |----------|--------|-----|
 | Agent runtime | **Gemini Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via Interactions API | Bleeding-edge → scores the 40% technicality weight; env-ID statefulness *is* the continual-learning substrate; eligible for the $5k Gemini prize |
-| Memory substrate | **MongoDB Atlas (document + Vector Search)** | Partner tool (Atlas Sandbox on GCP); one managed store for docs + vectors; no Docker to babysit live; supports the "hybrid" claim |
+| Memory substrate | **SQLite (stdlib, `db/revmem.db`)** + embedding-cosine rerank | Zero infra; persists on the local demo disk; the demo's retrieval intelligence is the reputation rerank, not the store |
 | Data interface | **Structured JSON** (agent reads contract/CRM via tools) | Reliable; keeps the heavy reasoning off flaky UI automation |
-| API + hosting | **FastAPI on DigitalOcean App Platform** | Hosted agent must reach RevMem; hosting on DO also grabs the DO special prize ($200 credits cover it) |
-| Agent-working view | **CLI (Rich)** | CLI-forward keeps the hero the *agent's behavior*, not a dashboard; Streamlit is banned and we avoid a web UI entirely |
-| Human-in-the-loop | **Single CFO email approval (Resend + magic link)** | One clean approval gate when RevMem finishes; real enterprise sign-off moment, robust for a live demo |
+| API + exposure | **FastAPI run locally, exposed via ngrok tunnel** | The hosted agent needs a reachable URL; ngrok gives instant reloads, local logs, no deploy cycle |
+| UI | **React + Vite** | Streamlit is banned; matches the broader `lex-ui` stack |
 | Skills / permissions | **Tier-scoped `AGENTS.md` + `SKILL.md`, regenerated per session** | Permission expansion becomes a native Antigravity feature, enforced server-side at the tool layer |
 | Scenario | Contract → CRM pricing reconciliation + approver routing | Recognizable enterprise workflow with a natural governance moment |
-| Deployment | Atlas (cloud) + RevMem API (DO) + hosted agent (Google) | No local DB to die mid-demo |
+| Deployment | Local SQLite + local FastAPI + ngrok tunnel + hosted agent (Google) | Nothing in the critical path depends on a managed service |
 | Demo format | Pre-run S1 + S2, **live S3**, recorded fallback | De-risks the 20% live-demo score |
 
 ---
@@ -62,28 +61,24 @@ Demo must show only what we built during the event and clearly identify it. Repo
 │   env-ID → runtime continuity                            │
 │   AGENTS.md + SKILL.md → skills gated by reputation tier  │
 └───────────────┬──────────────────────────────────────────┘
-                │ calls tools ▼ (Interactions API)
+                │ calls tools ▼ (Interactions API, via ngrok URL)
 ┌───────────────┴──────────────────────────────────────────┐
-│ RevMem API   (FastAPI · DigitalOcean App Platform)        │
-│   ├─ Context Engine    → Atlas Vector Search retrieval    │
+│ RevMem API   (FastAPI · local · exposed via ngrok)        │
+│   ├─ Context Engine    → embedding-cosine retrieval       │
 │   │                       reranked by reputation          │
 │   ├─ Governance Engine → policy → approver routing;       │
 │   │                       reputation tier → allowed tools │
 │   └─ Reputation Engine → outcome-weighted score + tiering  │
 └───────────────┬──────────────────────────────────────────┘
                 │
-        ┌───────┴────────┐          ┌───────────────────────────┐
-        │ MongoDB Atlas  │◄─────────│ CLI · Rich  [Person C]    │
-        │ memories,      │  reads   │ live agent-working         │
-        │ sessions,      │          │ transcript + reputation /  │
-        │ agents, policy,│          │ routing overlays           │
-        │ mock CRM,      │          └───────────────────────────┘
-        │ approvals      │          ┌───────────────────────────┐
-        └───────┬────────┘          │ Email approval [Person C]  │
-                │ approve flips      │ RevMem finishes → 1 CFO    │
-                └────────────────────│ email → Approve link →     │
-                                     │ flips approval → CRM write │
-                                     └───────────────────────────┘
+        ┌───────┴────────┐          ┌──────────────────────┐
+        │ SQLite         │          │ React + Vite UI      │
+        │ db/revmem.db   │◄─────────│ live agent-working    │
+        │ memories,      │  reads   │ view + reputation /   │
+        │ sessions,      │          │ routing overlays      │
+        │ agents, policy,│          │ + approve button (S3) │
+        │ mock CRM       │          └──────────────────────┘
+        └────────────────┘
 ```
 
 ---
@@ -91,7 +86,7 @@ Demo must show only what we built during the event and clearly identify it. Repo
 ## Two Improvement Axes (kept rigorously separate)
 
 **1. Continual learning — the hero (theme-critical, *not* RAG).**
-The agent learns the **ramp lesson** — *"TCV parity is insufficient for ramped deals; reconcile the annual schedule"* — from **its own Session-1 mistake**. The reviewer's correction on the S1 outcome creates one experiential memory. It is retrieved in later sessions via Atlas Vector Search and reranked by reputation-weighted relevance.
+The agent learns the **ramp lesson** — *"TCV parity is insufficient for ramped deals; reconcile the annual schedule"* — from **its own Session-1 mistake**. The reviewer's correction on the S1 outcome creates one experiential memory. It is retrieved in later sessions via embedding cosine and reranked by reputation-weighted relevance.
 
 **2. Governance — config, framed as a "boundary" (never "doc ingestion").**
 A delegation-of-authority (DOA) policy drives **approver routing** (AM → Controller → CFO/CCO by materiality). Editing the policy re-routes live. This is the *Adaptive Governance* feature, distinct from reputation tiers.
@@ -113,7 +108,7 @@ class Memory(BaseModel):
     agent_id: str
     type: str                  # pricing_field_rule | materiality_threshold | contract_term | crm_record
     content: str               # natural-language lesson
-    embedding: list[float]     # Atlas Vector Search index
+    embedding: list[float]     # embedded for cosine rerank
     metadata: dict             # {deal_type, focus_fields, threshold_usd, source, ...}
     relevance_score: float     # starts 0.5, adjusted by outcomes (0.0–1.0)
     access_count: int
@@ -161,8 +156,8 @@ class PermissionTier:
 | Tool | Purpose | Tier gate |
 |------|---------|-----------|
 | `get_contract(deal_id)` / `get_crm_record(deal_id)` | Fetch structured order form + CRM record | any |
-| `retrieve_context(deal_type, query)` | Atlas vector retrieval of experiential memories + active policy | any |
-| `route_for_approval(discrepancy, recommended_approver)` | Governance engine returns approver per policy; emits the approval request (→ single CFO email at session end) | any |
+| `retrieve_context(deal_type, query)` | Embedding-cosine retrieval of experiential memories + active policy | any |
+| `route_for_approval(discrepancy, recommended_approver)` | Governance engine returns approver per policy; emits approval request | any |
 | `write_crm(deal_id, corrected_fields)` | Reconcile CRM to the signed contract | **ANALYST+** (denied below → "escalate instead") |
 | `log_outcome(session_id, decisions, result)` | Close session → triggers reputation + relevance updates | any |
 | `store_memory(...)` | Persist an experiential lesson | **ANALYST+** |
@@ -175,9 +170,9 @@ Each session, RevMem generates a **tier-scoped `SKILL.md`**: higher reputation d
 
 ```
 After each session:
-  success_rate    = successful_sessions / total_sessions
-  recent_accuracy = correct material catches + correct routing − false escalations (recent window)
-  reputation      = 0.6*success_rate + 0.3*recent_accuracy + 0.1*efficiency_bonus
+  success_rate    = successful_sessions / total_sessions     # success = accuracy >= 0.5
+  avg_accuracy    = mean(accuracy over all completed sessions)
+  reputation      = 0.6*success_rate + 0.4*avg_accuracy
   reputation      = clamp(reputation, 0.0, 1.0)
 
   tier = OBSERVER if rep < 0.3 else ANALYST if rep < 0.6 else AUTONOMOUS
@@ -191,7 +186,8 @@ Retrieval rerank (Context Engine):
   score = α*cosine_similarity + β*relevance_score + γ*recency      # α=0.5, β=0.4, γ=0.1
 ```
 
-This is real reranking driven by Atlas vector search — not keyword matching.
+Real reranking driven by embedding cosine — not keyword matching. (Embeddings via `google-genai`
+`gemini-embedding-001`, with a deterministic local fallback so dev/tests run offline.)
 
 ---
 
@@ -237,7 +233,7 @@ The two transitions cleanly separate the two effects:
 
 | Criterion | Weight | Our story |
 |-----------|--------|-----------|
-| **Technicality** | 40% | Antigravity managed agent + env-ID statefulness + Atlas vector reranking + governance/reputation engine. Hard to recreate. |
+| **Technicality** | 40% | Antigravity managed agent + env-ID statefulness + embedding-cosine reranking + governance/reputation engine. Hard to recreate. |
 | **Creativity & Originality** | 25% | Governed, reputation-earned autonomy in finance — not a wrapper chatbot. |
 | **Live Demo** | 20% | S1/S2 pre-run; S3 live with recorded fallback. |
 | **Future Potential** | 15% | The missing infra layer for safely deploying improving agents in regulated domains. |
@@ -248,16 +244,16 @@ The two transitions cleanly separate the two effects:
 
 ```
 revmem/
-├── api/                  ← [Person B] FastAPI server (deploys to DigitalOcean)
+├── api/                  ← [Person B] FastAPI server (local, ngrok-exposed)
 │   ├── main.py
 │   └── routes.py
 ├── core/                 ← [Person B] memory + governance + reputation
 │   ├── models.py         # Pydantic models (shared)
-│   ├── context.py        # Atlas vector retrieval + reranking
+│   ├── database.py       # SQLite connection, schema, row CRUD
+│   ├── context.py        # embedding retrieval + reranking
 │   ├── governance.py     # policy → routing; tier → allowed tools; SKILL.md generation
 │   ├── reputation.py     # score + tier
-│   ├── session.py        # lifecycle + outcome logging
-│   └── atlas.py          # MongoDB Atlas client + vector index
+│   └── session.py        # lifecycle + outcome logging
 ├── agent/                ← [Person A] Antigravity integration
 │   ├── runner.py         # Interactions API calls, env-ID threading
 │   ├── AGENTS.md         # agent persona
@@ -286,33 +282,29 @@ revmem/
 1. Interactions API: spin up a managed agent, confirm a round-trip call (**by hour 4**)
 2. env-ID threading for cross-session continuity
 3. `AGENTS.md` persona + tier-scoped `SKILL.md` generation
-4. Tool wiring to RevMem API
+4. Tool wiring to the RevMem ngrok URL (via `REVMEM_BASE_URL`)
 5. Acme / Globex scenario scripting + expected outcomes
 6. Local-Gemini-loop fallback if Antigravity isn't working by hour 8
 
 ### Person B — RevMem core + API (hour 0–16)
 1. `core/models.py` (30m)
-2. `core/atlas.py` — Atlas client + vector index (1h)
+2. `core/database.py` — SQLite schema + CRUD (1h)
 3. `core/context.py` — retrieve + rerank (2h)
 4. `core/governance.py` — policy routing + tier gating + SKILL.md (2h)
 5. `core/reputation.py` — score + tier (1h)
 6. `core/session.py` — lifecycle + outcome → triggers updates (1h)
-7. `api/` — FastAPI endpoints; deploy to DigitalOcean (1.5h)
+7. `api/` — FastAPI endpoints; expose via ngrok (1.5h)
 8. `data/` — Acme + Globex contracts, stale CRM, DOA policy, seed (2h)
 9. Integration with Person A (2h)
 
-### Person C — CLI experience + human-in-the-loop email approval (hour 0–16)
+> Detailed task-by-task plan: `docs/superpowers/plans/2026-06-27-revmem-person-b-core-api.md`
 
-The agent's behavior is shown as a **live terminal transcript** (no web dashboard). Person C owns the CLI that renders it and the **single CFO email approval** that gates the S3 CRM write.
-
-1. CLI skeleton (Python + **Rich**): live agent-working transcript — each step the agent takes, streamed as readable panels (the **main feature**) (3h)
-2. Reputation + routing overlays rendered **inline** in the CLI: reputation bar + tier, the contract-vs-CRM diff table, the routing decision (2h)
-3. Email approval flow: when RevMem finishes, send **one** approval email to the CFO (Resend) with discrepancy + recommended fix + an **Approve** magic link; `/approve/{token}` flips approval state; CLI polls and resumes to execute the CRM write (3h)
-4. Live policy-edit + re-run as a CLI command for S3 ($1k → $5k threshold shifts routing on stage) (2h)
-5. Polish: color, reputation bar moving across S1→S2→S3, real-time reads from RevMem API (2h)
-6. Integration testing with Person A (agent) + Person B (API / approval state) (2h)
-
-**Coordination:** the `/approve/{token}` handler and the `approvals` collection are shared with Person B's FastAPI + Atlas — agree the approval-state contract early. `route_for_approval` (Person A's tool) triggers the email send.
+### Person C — Agent workflow UI (React + Vite, hour 0–16)
+1. Vite skeleton + live agent-working view (the **main feature**) (3h)
+2. Reputation + routing overlays embedded in the view (2h)
+3. Approve button + live policy-edit control for S3 (2h)
+4. Polish, real-time refresh from RevMem API (3h)
+5. Integration testing (2h)
 
 ### Everyone — last 8 hours
 | Hours | Activity |
@@ -328,12 +320,12 @@ The agent's behavior is shown as a **live terminal transcript** (no web dashboar
 
 | Hour | Checkpoint | Must be true |
 |------|-----------|--------------|
-| 4 | **Skeleton** | Antigravity round-trip call works; Atlas connected; CLI renders a stub transcript; models defined |
-| 8 | **Pieces work** | Retrieve+rerank works; agent reconciles mock data; CLI shows a live run; CFO email round-trips end-to-end. **Antigravity go/no-go → else local-loop fallback** |
-| 12 | **Integration** | Agent calls RevMem tools, stores memory, CLI reads from same store; CFO email → Approve link → CRM write works |
+| 4 | **Skeleton** | Antigravity round-trip call works; SQLite seeded; React shell renders; models defined |
+| 8 | **Pieces work** | Retrieve+rerank works; agent reconciles mock data; UI shows a live run. **Antigravity go/no-go → else local-loop fallback** |
+| 12 | **Integration** | Agent calls RevMem tools through ngrok, stores memory, UI reads from same store |
 | 16 | **Demo flow** | 3 sessions run end-to-end; improvement + permission expansion visible |
 | 20 | **Polish** | S3 rehearsed; edge cases handled; routing live-edit works |
-| 24 | **Ship** | Video recorded, README written, repo public, DO deploy live |
+| 24 | **Ship** | Video recorded, README written, repo public, ngrok tunnel stable |
 
 ---
 
@@ -346,8 +338,9 @@ The agent's behavior is shown as a **live terminal transcript** (no web dashboar
 | Reads as a "dashboard project" (disqualifying) | Foreground agent behavior in a **CLI**; reputation/routing overlays embedded inline, never a standalone web dashboard |
 | CFO approval email doesn't deliver / link unreachable live | Resend (reliable) + pre-warmed inbox; **magic-link approve** (no fragile inbound-reply parsing); manual `approve` CLI command as last-resort fallback |
 | Reads as "basic RAG" (disqualifying) | Lead with the experiential learning loop; call policy a "governance boundary" |
-| Hosted agent can't reach local RevMem | RevMem API on DigitalOcean; Atlas is cloud — nothing local in the critical path |
-| Atlas vector index latency | Pre-embed seed memories; cache S1/S2 runs |
+| Hosted agent can't reach RevMem | Expose via ngrok with a **reserved domain** (stable URL); agent reads `REVMEM_BASE_URL` (no hardcode) |
+| Tunnel drops on venue wifi | Phone hotspot backup; disable laptop sleep; pre-run S1/S2 so only S3 needs the live tunnel |
+| Embedding API latency | Pre-embed memories at write time; cache S1/S2 runs |
 
 ---
 
@@ -355,12 +348,12 @@ The agent's behavior is shown as a **live terminal transcript** (no web dashboar
 
 ```
 Python 3.11+      — RevMem core + API (uv)
-FastAPI           — API server (hosted on DigitalOcean App Platform)
-MongoDB Atlas     — document + Vector Search (single store)
+FastAPI           — API server (local, exposed via ngrok)
+SQLite            — single-file store (stdlib sqlite3)
 Pydantic          — data models
-google-genai      — Gemini Interactions API (Antigravity managed agents)
-Rich (Python)     — CLI agent-working view (NOT Streamlit, NOT a web dashboard)
-Resend            — single human-in-the-loop CFO approval email + magic-link approve
+google-genai      — Gemini Interactions API (Antigravity) + embeddings
+React + Vite       — agent workflow UI (NOT Streamlit)
+ngrok             — public tunnel to the local API (reserved domain)
 ```
 
 ---
@@ -371,9 +364,12 @@ Resend            — single human-in-the-loop CFO approval email + magic-link a
 # RevMem API
 uv pip install -r requirements.txt
 export GEMINI_API_KEY=...           # aistudio.google.com/api-keys
-export MONGODB_ATLAS_URI=...        # Atlas Sandbox (GCP)
-uv run python -m data.seed          # seed contracts, CRM, policy, memories
-uv run uvicorn api.main:app         # → RevMem API (deploy target: DigitalOcean)
+uv run python -m data.seed          # seed contracts, CRM, policy → db/revmem.db
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# Expose to the hosted agent
+ngrok http 8000 --domain=<your-reserved>.ngrok.app
+# Person A + UI set REVMEM_BASE_URL to the ngrok URL
 
 # CLI (the agent-working view)
 export RESEND_API_KEY=...            # resend.com — single CFO approval email
