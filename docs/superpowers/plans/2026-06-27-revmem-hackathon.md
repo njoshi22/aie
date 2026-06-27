@@ -4,17 +4,17 @@
 
 **Goal:** Build RevMem, a governed memory and context layer that shows a finance/revops agent improving across repeated sessions through better retrieval, reputation, governance, and audit visibility.
 
-**Architecture:** Use one TypeScript Next.js app for the hackathon: dashboard, mock finance UIs, REST APIs, and domain services live in one deployable unit. Keep persistence local and explicit with SQLite plus Drizzle, while isolating memory, retrieval, governance, reputation, audit, and Gemini adapters behind typed modules that can move to Postgres, pgvector, Neo4j, or a standalone MCP server after the event.
+**Architecture:** Use one TypeScript monorepo for the hackathon: TanStack Start owns the dashboard and mock finance UI, Hono owns the API, and shared domain modules own memory, retrieval, governance, reputation, audit, and Gemini adapters. Use Postgres with pgvector from day one so retrieval behaves like the scalable version without adding extra infrastructure beyond one database container.
 
-**Tech Stack:** Next.js App Router, TypeScript strict mode, React, Tailwind, Drizzle ORM, SQLite, Vitest, Playwright, `@google/genai`, Zod.
+**Tech Stack:** TanStack Start, Hono, TypeScript strict mode, React, Tailwind, Drizzle ORM, Postgres, pgvector, Vitest, Playwright, `@google/genai`, Zod.
 
 ## Global Constraints
 
-- Build for a 48-hour hackathon first; do not introduce separate services, queues, Kubernetes, event buses, or production identity providers.
+- Build for a 48-hour hackathon first; do not introduce queues, Kubernetes, event buses, production identity providers, or more than one API service.
 - Keep the demo scalable by using clean module boundaries and adapter interfaces, not by prematurely deploying distributed infrastructure.
 - MVP must show structured finance memory, self-improving retrieval, agent identity and reputation, adaptive governance, audit/observability, feedback/reflection, Gemini usage, and visible improvement across 2-3 sessions.
-- Store graph relationships in relational tables for the MVP; do not add a dedicated graph database during the hackathon.
-- Store embeddings as JSON vectors in SQLite for the MVP; design the repository interface so pgvector can replace it after the hackathon.
+- Store graph relationships in relational Postgres tables for the MVP; do not add a dedicated graph database during the hackathon.
+- Store embeddings in a pgvector column and index with HNSW/cosine operations through Drizzle migrations.
 - Use Gemini through a server-side adapter only; never expose API keys to client components.
 - Computer Use integration should feed observations into RevMem. RevMem should not own browser automation in the first build.
 - MCP-style shape is a stretch goal; ship REST routes first with request/response contracts that can be wrapped by MCP later.
@@ -26,11 +26,11 @@
 
 ### Approach Options
 
-**Recommended: single full-stack Next.js app with typed domain modules.**
-This gets the dashboard, mock UIs, APIs, seed data, and demo loop into one repo with one dev command. It is the fastest path to a convincing demo while preserving scale by keeping the core logic in framework-independent `src/core/*` modules.
+**Recommended: TanStack Start UI plus Hono API in one TypeScript repo.**
+This gets the dashboard, mock UIs, APIs, seed data, and demo loop into one repo while avoiding Next.js. It preserves scale by keeping the core logic in framework-independent `src/core/*` modules and gives the API a clean deployable boundary without dragging in a second language.
 
 **Alternative: FastAPI backend plus React frontend.**
-This is fine technically, but it doubles bootstrapping, deployment, auth/env handling, and test setup for a hackathon. The split only pays off once the team has external consumers or heavy backend workloads.
+This is fine technically, especially if the backend becomes Python-heavy later. It is the wrong first choice here because Gemini JS, TanStack, Zod schemas, Drizzle, and UI contracts can all share TypeScript types if the API is Hono.
 
 **Alternative: MCP server first.**
 This is attractive for agent infrastructure, but it risks spending the hackathon on protocol plumbing instead of the visible continual-learning story. Build REST with MCP-shaped contracts first, then wrap the same core services in MCP after the demo.
@@ -44,7 +44,7 @@ Gemini / Computer Use Agent
         |
         | observations, retrieval requests, task outcomes
         v
-Next.js Route Handlers
+Hono API
         |
         v
 Typed RevMem Core
@@ -56,10 +56,10 @@ Typed RevMem Core
         +-- Audit Log
         |
         v
-SQLite + Drizzle
+Postgres + pgvector + Drizzle
         |
         v
-Dashboard + Mock Finance UIs
+TanStack Start Dashboard + Mock Finance UIs
 ```
 
 ### Domain Model
@@ -164,12 +164,12 @@ export interface GovernanceDecision {
 
 ### Storage Strategy
 
-SQLite is enough for the hackathon if the repository interface is clean. Use Drizzle migrations and avoid ORM magic hidden in components.
+Use Postgres and pgvector immediately. This is not overengineering for this project because vector retrieval is core product behavior, and running one `pgvector` container is cheaper than shipping a throwaway local vector path and migrating it later. Use Drizzle migrations and avoid ORM access from UI components.
 
 - `agents`: identity, credential label, reputation score, permission tier.
 - `sessions`: session number, agent ID, task kind, started/completed timestamps.
 - `observations`: raw event data and extracted entities.
-- `memories`: consolidated memory records and JSON embedding vectors.
+- `memories`: consolidated memory records and `vector(768)` embedding values.
 - `memory_edges`: graph relationships between memories.
 - `retrieval_events`: query, returned memory IDs, ranking components, helpful flag.
 - `task_outcomes`: session result and evidence.
@@ -192,7 +192,7 @@ score =
 + 0.05 * confidence
 ```
 
-For the first build, vector similarity can use Gemini embeddings if available through the current SDK path. If embeddings are not accessible during implementation, use deterministic local hash vectors behind the same `EmbeddingProvider` interface so the demo and tests still run. The Gemini adapter should still be used for reflection and memory consolidation so the prize path remains real.
+For the first build, vector similarity should use pgvector cosine distance. Gemini embeddings should be used when credentials and the current SDK path are available. Tests and offline demo mode should use deterministic local hash vectors behind the same `EmbeddingProvider` interface, with the same configured dimension as the database column. The Gemini adapter should still be used for reflection and memory consolidation so the prize path remains real.
 
 ### Governance Rules
 
@@ -232,18 +232,18 @@ The demo should be tight:
 
 The first scalable upgrade is not microservices. It is replacing internals behind stable interfaces:
 
-1. Move SQLite to Postgres.
-2. Replace JSON vector scan with pgvector.
+1. Move the Hono API to its own deployable service if the TanStack Start app becomes operationally noisy.
+2. Add tenant-scoped auth and policy-backed approvals.
 3. Add a dedicated graph store only if graph traversal becomes a bottleneck.
 4. Wrap REST routes with an MCP server using the same core services.
-5. Add tenant-scoped auth and policy-backed approvals.
-6. Add real finance/revops connectors after the mock workflow proves value.
+5. Add real finance/revops connectors after the mock workflow proves value.
+6. Tune pgvector indexes, dimensions, and embedding models with production data.
 
 ---
 
 ## File Structure
 
-Create the app with this structure. Keep route handlers thin; put behavior in `src/core/*`.
+Create the app with this structure. Keep Hono route handlers thin; put behavior in `src/core/*`.
 
 ```text
 .
@@ -251,28 +251,26 @@ Create the app with this structure. Keep route handlers thin; put behavior in `s
 ├── README.md
 ├── AGENTS.md
 ├── .env.example
+├── docker-compose.yml
 ├── package.json
 ├── tsconfig.json
-├── next.config.ts
+├── vite.config.ts
 ├── eslint.config.mjs
 ├── vitest.config.ts
 ├── playwright.config.ts
 ├── drizzle.config.ts
 ├── migrations/
 ├── src/
-│   ├── app/
-│   │   ├── page.tsx
-│   │   ├── layout.tsx
-│   │   ├── globals.css
-│   │   ├── mock-finance/
-│   │   │   └── page.tsx
-│   │   └── api/
-│   │       ├── agents/route.ts
-│   │       ├── observations/route.ts
-│   │       ├── retrieve/route.ts
-│   │       ├── governance/route.ts
-│   │       ├── outcomes/route.ts
-│   │       └── demo/reset/route.ts
+│   ├── api/
+│   │   ├── app.ts
+│   │   ├── server.ts
+│   │   └── routes/
+│   │       ├── agents.ts
+│   │       ├── observations.ts
+│   │       ├── retrieve.ts
+│   │       ├── governance.ts
+│   │       ├── outcomes.ts
+│   │       └── demo.ts
 │   ├── components/
 │   │   ├── audit-timeline.tsx
 │   │   ├── demo-controls.tsx
@@ -304,6 +302,13 @@ Create the app with this structure. Keep route handlers thin; put behavior in `s
 │   │   ├── client.ts
 │   │   ├── schema.ts
 │   │   └── seed.ts
+│   ├── routes/
+│   │   ├── __root.tsx
+│   │   ├── index.tsx
+│   │   └── mock-finance.tsx
+│   ├── router.tsx
+│   ├── routeTree.gen.ts
+│   ├── styles.css
 │   └── test/
 │       └── factories.ts
 ├── scripts/
@@ -323,38 +328,44 @@ Create the app with this structure. Keep route handlers thin; put behavior in `s
 
 ---
 
-## Task 1: Scaffold the Typed App and Quality Gates
+## Task 1: Scaffold the Typed App, API, Database, and Quality Gates
 
 **Files:**
 - Create: `package.json`
 - Create: `tsconfig.json`
-- Create: `next.config.ts`
+- Create: `vite.config.ts`
 - Create: `eslint.config.mjs`
 - Create: `vitest.config.ts`
 - Create: `playwright.config.ts`
+- Create: `docker-compose.yml`
 - Create: `.env.example`
 - Create: `README.md`
 - Create: `AGENTS.md`
-- Create: `src/app/layout.tsx`
-- Create: `src/app/globals.css`
-- Create: `src/app/page.tsx`
+- Create: `src/routes/__root.tsx`
+- Create: `src/routes/index.tsx`
+- Create: `src/router.tsx`
+- Create: `src/styles.css`
+- Create: `src/api/app.ts`
+- Create: `src/api/server.ts`
 
 **Interfaces:**
-- Produces: strict TypeScript project, lint command, typecheck command, unit test command, e2e command.
+- Produces: strict TypeScript project, TanStack Start shell, Hono API shell, Postgres container, lint command, typecheck command, unit test command, e2e command.
 - Consumes: none.
 
-- [ ] **Step 1: Create the Next.js TypeScript baseline**
+- [ ] **Step 1: Create the TanStack Start and Hono TypeScript baseline**
 
-Use current Next.js App Router conventions. Route handlers must live in `app/**/route.ts`, and server-only integrations must stay out of client components.
+Use current TanStack Start conventions for `src/routes/*` and Hono conventions for `src/api/*`. Keep server-only integrations out of React components.
 
 `package.json` scripts:
 
 ```json
 {
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "lint": "next lint",
+    "dev": "vite dev",
+    "dev:api": "tsx watch src/api/server.ts",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:api\"",
+    "build": "vite build",
+    "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -372,39 +383,69 @@ Use current Next.js App Router conventions. Route handlers must live in `app/**/
 
 `tsconfig.json` must enable `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, and path alias `@/*` to `src/*`.
 
-- [ ] **Step 3: Add environment documentation**
+- [ ] **Step 3: Add Postgres and pgvector**
+
+`docker-compose.yml` should run a single pgvector-backed Postgres service:
+
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: revmem
+      POSTGRES_PASSWORD: revmem
+      POSTGRES_DB: revmem
+    volumes:
+      - revmem-postgres:/var/lib/postgresql/data
+
+volumes:
+  revmem-postgres:
+```
+
+- [ ] **Step 4: Add environment documentation**
 
 `.env.example`:
 
 ```bash
-DATABASE_URL=file:./data/revmem.db
+DATABASE_URL=postgres://revmem:revmem@localhost:5432/revmem
+API_BASE_URL=http://localhost:8787
+EMBEDDING_DIMENSIONS=768
 GEMINI_API_KEY=
 GEMINI_PROJECT=
 GEMINI_LOCATION=
 GEMINI_MODE=developer-api
 ```
 
-- [ ] **Step 4: Create a minimal dashboard shell**
+- [ ] **Step 5: Create a minimal dashboard shell and API health route**
 
-`src/app/page.tsx` should render a static dashboard shell for this task: RevMem, reputation, memories, retrieval quality, audit trail, and demo controls. Task 9 replaces the shell with server-side demo data.
+`src/routes/index.tsx` should render a static dashboard shell for this task: RevMem, reputation, memories, retrieval quality, audit trail, and demo controls. Task 9 replaces the shell with API-backed demo data.
 
-- [ ] **Step 5: Verify gates**
+`src/api/app.ts` should export a Hono app with `GET /healthz` returning JSON:
+
+```json
+{ "ok": true, "service": "revmem-api" }
+```
+
+- [ ] **Step 6: Verify gates**
 
 Run:
 
 ```bash
+npm run dev:api
 npm run lint
 npm run typecheck
 npm run test
 ```
 
-Expected: all commands pass. If the scaffold command generates different lint behavior, update the script to the current Next.js-supported lint command after checking Next.js docs through Context7.
+Expected: the API starts, `/healthz` responds, and all commands pass. If TanStack Start or Hono setup syntax differs, check Context7 before changing it.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add .env.example README.md AGENTS.md package.json tsconfig.json next.config.ts eslint.config.mjs vitest.config.ts playwright.config.ts src/app
-git commit -m "chore: scaffold revmem app"
+git add .env.example README.md AGENTS.md docker-compose.yml package.json tsconfig.json vite.config.ts eslint.config.mjs vitest.config.ts playwright.config.ts src/routes src/router.tsx src/styles.css src/api
+git commit -m "chore: scaffold revmem app and api"
 ```
 
 ---
@@ -420,7 +461,7 @@ git commit -m "chore: scaffold revmem app"
 - Create: `tests/unit/schema-validation.test.ts`
 
 **Interfaces:**
-- Produces: `ObservationInput`, `RetrievalRequest`, `GovernanceRequest`, `TaskOutcomeInput`, `MemoryRecord`, `PermissionTier`, Zod schemas, Drizzle tables.
+- Produces: `ObservationInput`, `RetrievalRequest`, `GovernanceRequest`, `TaskOutcomeInput`, `MemoryRecord`, `PermissionTier`, Zod schemas, Drizzle Postgres tables, pgvector migration.
 - Consumes: Task 1 project setup.
 
 - [ ] **Step 1: Write validation tests first**
@@ -468,19 +509,20 @@ Use the core interfaces from the architecture section. Do not use `any`; use `Re
 
 Implement schemas in `src/core/schemas.ts`. Use `z.record(z.string(), z.string())` for entity maps and constrain retrieval `limit` to `1..12`.
 
-- [ ] **Step 4: Define Drizzle tables**
+- [ ] **Step 4: Define Drizzle Postgres tables**
 
-Implement Drizzle tables matching the storage strategy. Use text IDs generated by the application, integer timestamps or ISO text consistently, and JSON text columns for arrays/vectors in SQLite.
+Implement Drizzle tables matching the storage strategy. Use text IDs generated by the application, timestamp columns consistently, JSONB columns for structured metadata, and a pgvector `vector` column for embeddings. Create the `vector` extension in the migration before creating the memory embedding index.
 
 - [ ] **Step 5: Generate the initial migration**
 
 Run:
 
 ```bash
+docker compose up -d postgres
 npm run db:generate
 ```
 
-Expected: a migration appears under `migrations/`.
+Expected: a migration appears under `migrations/` and includes the pgvector extension and memory embedding index.
 
 - [ ] **Step 6: Verify**
 
@@ -510,7 +552,7 @@ git commit -m "feat: add revmem domain schema"
 - Create: `src/db/seed.ts`
 - Create: `scripts/reset-demo-db.ts`
 - Create: `src/components/mock-finance-workspace.tsx`
-- Create: `src/app/mock-finance/page.tsx`
+- Create: `src/routes/mock-finance.tsx`
 - Create: `tests/integration/seed.test.ts`
 - Create: `tests/e2e/demo.spec.ts`
 
@@ -564,7 +606,7 @@ Expected: seed is deterministic, UI smoke test passes.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/core/demo src/db/seed.ts scripts/reset-demo-db.ts src/components/mock-finance-workspace.tsx src/app/mock-finance tests/integration/seed.test.ts tests/e2e/demo.spec.ts
+git add src/core/demo src/db/seed.ts scripts/reset-demo-db.ts src/components/mock-finance-workspace.tsx src/routes/mock-finance.tsx tests/integration/seed.test.ts tests/e2e/demo.spec.ts
 git commit -m "feat: add mock finance workspace"
 ```
 
@@ -653,7 +695,7 @@ git commit -m "feat: add governed memory ingestion"
 
 **Interfaces:**
 - Consumes: `RetrievalRequest`, `MemoryRecord[]`, retrieval events, task outcomes.
-- Produces: `RetrievalResult[]`.
+- Produces: `RetrievalResult[]`, pgvector-backed ranking with explainable score reasons.
 
 - [ ] **Step 1: Write ranking tests**
 
@@ -674,15 +716,19 @@ taskKindBoost(taskKind: TaskKind, memory: MemoryRecord): number
 recencyBoost(updatedAt: string, now: Date): number
 ```
 
-- [ ] **Step 3: Implement `RetrievalService.retrieve`**
+- [ ] **Step 3: Implement pgvector candidate selection**
+
+Use pgvector cosine distance to fetch the nearest memory candidates before applying the full explainable score. Keep the query behind `MemoryRepository.findNearestByEmbedding(embedding, limit)` so index tuning does not leak into service code.
+
+- [ ] **Step 4: Implement `RetrievalService.retrieve`**
 
 Validate request, embed the query, fetch candidate memories, compute score, persist retrieval event, and return top results with reasons.
 
-- [ ] **Step 4: Implement helpfulness update**
+- [ ] **Step 5: Implement helpfulness update**
 
 When outcomes mark returned memory IDs as helpful, increment `usefulnessScore` and link the retrieval event to the outcome.
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 6: Verify**
 
 Run:
 
@@ -694,7 +740,7 @@ npm run test -- retrieval-service
 
 Expected: ranking and usefulness tests pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/core/memory/retrieval-service.ts tests/unit/retrieval-service.test.ts
@@ -769,12 +815,13 @@ git commit -m "feat: add adaptive governance"
 ## Task 7: Expose Thin REST APIs
 
 **Files:**
-- Create: `src/app/api/agents/route.ts`
-- Create: `src/app/api/observations/route.ts`
-- Create: `src/app/api/retrieve/route.ts`
-- Create: `src/app/api/governance/route.ts`
-- Create: `src/app/api/outcomes/route.ts`
-- Create: `src/app/api/demo/reset/route.ts`
+- Create: `src/api/routes/agents.ts`
+- Create: `src/api/routes/observations.ts`
+- Create: `src/api/routes/retrieve.ts`
+- Create: `src/api/routes/governance.ts`
+- Create: `src/api/routes/outcomes.ts`
+- Create: `src/api/routes/demo.ts`
+- Modify: `src/api/app.ts`
 - Create: `tests/integration/api-flow.test.ts`
 
 **Interfaces:**
@@ -785,13 +832,13 @@ git commit -m "feat: add adaptive governance"
 
 The test should create an agent, post an observation, retrieve context, request governance, record an outcome, and assert reputation changes.
 
-- [ ] **Step 2: Implement route handlers**
+- [ ] **Step 2: Implement Hono route modules**
 
-Use App Router `route.ts` files. Validate JSON request bodies with Zod. Return `400` for validation errors and `500` only for unexpected failures.
+Use separate Hono sub-routers and mount them from `src/api/app.ts`. Validate JSON request bodies with Zod. Return `400` for validation errors and `500` only for unexpected failures.
 
 - [ ] **Step 3: Keep routes thin**
 
-Each route handler should do only request parsing, service call, and response formatting. Business rules belong in `src/core/*`.
+Each Hono handler should do only request parsing, service call, and response formatting. Business rules belong in `src/core/*`.
 
 - [ ] **Step 4: Verify**
 
@@ -808,7 +855,7 @@ Expected: full API flow passes.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/app/api tests/integration/api-flow.test.ts
+git add src/api tests/integration/api-flow.test.ts
 git commit -m "feat: expose revmem api"
 ```
 
@@ -887,7 +934,7 @@ git commit -m "feat: add repeatable learning demo"
 - Create: `src/components/memory-table.tsx`
 - Create: `src/components/audit-timeline.tsx`
 - Create: `src/components/demo-controls.tsx`
-- Modify: `src/app/page.tsx`
+- Modify: `src/routes/index.tsx`
 
 **Interfaces:**
 - Consumes: sessions, memories, retrieval events, reputation events, governance decisions, audit events.
@@ -895,7 +942,7 @@ git commit -m "feat: add repeatable learning demo"
 
 - [ ] **Step 1: Add dashboard data loader**
 
-Create server-side data functions that fetch current demo state. Do not fetch from client components unless interaction requires it.
+Create a TanStack route loader that fetches current demo state from the Hono API. Demo control buttons can call the API from the client because they are explicit user actions.
 
 - [ ] **Step 2: Implement metric strip**
 
@@ -931,7 +978,7 @@ Expected: dashboard renders populated demo data and e2e smoke still passes.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/app/page.tsx src/components
+git add src/routes/index.tsx src/components
 git commit -m "feat: add revmem observability dashboard"
 ```
 
@@ -966,7 +1013,7 @@ Include:
 Include project-specific guidance:
 
 - keep core logic in `src/core/*`
-- keep route handlers thin
+- keep Hono route handlers thin
 - use deterministic providers in tests
 - do not expose Gemini keys to client components
 - run lint, typecheck, unit tests, and e2e smoke for demo changes

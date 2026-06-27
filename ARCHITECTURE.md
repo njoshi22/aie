@@ -1,16 +1,39 @@
-# RevMem — Architecture Plan
+# RevMem — Architecture Plan (v2)
 
-**Hackathon: 24 hours | 3 people | All vibe coding**
+**Hackathon: AI Engineer World's Fair 2026 · 24h · 3 people**
+**Theme: Continual Learning (primary) + Self-Improvement Stack**
+**Special prizes in reach: Best Usage of Gemini 3.5 ($5k) · Best Usage of DigitalOcean**
 
 ---
 
 ## What We're Building
 
-RevMem = Python library + FastAPI server + Streamlit dashboard.
+RevMem is the **governed memory + reputation layer** that sits on top of a Gemini Managed Agent and makes its cross-session autonomy safe for finance.
 
-An AI agent (Gemini) does finance tasks (fee leakage detection). RevMem stores what the agent learns between sessions. Each session, the agent performs better because RevMem surfaces relevant context. A dashboard shows the improvement visually.
+The demo's hero is the **agent's behavior**, not a dashboard. An autonomous Gemini agent receives a newly-signed customer contract, reconciles its pricing against the CRM (mock Salesforce), routes discrepancies to the correct approver, and — across sessions — **visibly gets smarter and earns broader autonomy** because RevMem governs and improves its memory.
 
-**Demo story in 60 seconds**: Agent starts dumb → does a task → RevMem stores what worked → next session, agent is smarter → dashboard shows reputation going up, better accuracy, faster completion.
+**Demo story in 60 seconds**: Agent gets a signed contract → reconciles against CRM → the cold agent over-escalates a rounding artifact *and* misses a material ramp restructuring → RevMem captures the lesson from that outcome → next session the agent ignores the noise, catches the ramp, and routes it correctly → reputation rises, permissions expand → by session three it auto-reconciles low-risk corrections itself and escalates only genuine judgment calls.
+
+### Two statefulness layers (this is the pitch)
+
+- **Antigravity env-ID** gives *raw* session continuity (files, terminal, code state).
+- **RevMem** adds the *governed, reputation-scored, policy-bounded* memory layer that makes that continuity safe in a regulated domain.
+
+RevMem sits **on top of** the Gemini primitive — that is the Self-Improvement-Stack story, and a far stronger claim than "we called the Gemini API."
+
+---
+
+## Hackathon-Rules Compliance (non-negotiable)
+
+The 2026 rules disqualify several patterns. The architecture is built to avoid them:
+
+| Banned pattern | How we avoid it |
+|----------------|-----------------|
+| **Streamlit applications** | UI is React + Vite. No Streamlit anywhere. |
+| **Any project where a dashboard is the main feature** | The autonomous agent workflow is the main feature. Reputation/routing are thin overlays *embedded in the agent view*, never a standalone dashboard. |
+| **Basic RAG applications** | The hero is an *experiential continual-learning loop* (agent learns from its own mistake). The policy is framed as a **governance boundary**, never "document ingestion." |
+
+Demo must show only what we built during the event and clearly identify it. Repo public.
 
 ---
 
@@ -18,46 +41,58 @@ An AI agent (Gemini) does finance tasks (fee leakage detection). RevMem stores w
 
 | Decision | Choice | Why |
 |----------|--------|-----|
-| Memory store | SQLite + JSON | Simplest. No infra. Works for demo |
-| Vector/graph DB | Cut | Too much infra for 24h |
-| LLM | Gemini (LLM-agnostic interface) | Team has API key |
-| Dashboard | Streamlit | Best for vibe coding, Python-only |
-| Computer Use | Stretch goal | Not core to demo |
-| Architecture | Python package (not separate API server) | Single app, simpler |
-| Deployment | Local only | No deploy headaches |
-| Demo format | 5 min live + 1 min recorded video | Pre-run Sessions 1-2, live Session 3 |
+| Agent runtime | **Gemini Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via Interactions API | Bleeding-edge → scores the 40% technicality weight; env-ID statefulness *is* the continual-learning substrate; eligible for the $5k Gemini prize |
+| Memory substrate | **MongoDB Atlas (document + Vector Search)** | Partner tool (Atlas Sandbox on GCP); one managed store for docs + vectors; no Docker to babysit live; supports the "hybrid" claim |
+| Data interface | **Structured JSON** (agent reads contract/CRM via tools) | Reliable; keeps the heavy reasoning off flaky UI automation |
+| API + hosting | **FastAPI on DigitalOcean App Platform** | Hosted agent must reach RevMem; hosting on DO also grabs the DO special prize ($200 credits cover it) |
+| UI | **React + Vite** | Streamlit is banned; matches the broader `lex-ui` stack |
+| Skills / permissions | **Tier-scoped `AGENTS.md` + `SKILL.md`, regenerated per session** | Permission expansion becomes a native Antigravity feature, enforced server-side at the tool layer |
+| Scenario | Contract → CRM pricing reconciliation + approver routing | Recognizable enterprise workflow with a natural governance moment |
+| Deployment | Atlas (cloud) + RevMem API (DO) + hosted agent (Google) | No local DB to die mid-demo |
+| Demo format | Pre-run S1 + S2, **live S3**, recorded fallback | De-risks the 20% live-demo score |
 
 ---
 
-## Repo Structure
+## System Architecture
 
 ```
-revmem/
-├── api/                  ← [You] FastAPI server
-│   ├── main.py           # app entrypoint, CORS, lifespan
-│   └── routes.py         # REST endpoints
-├── core/                 ← [You] memory + reputation engine  
-│   ├── models.py         # shared Pydantic models (Memory, Session, Agent)
-│   ├── memory.py         # store, retrieve, update relevance
-│   ├── reputation.py     # score calculation, permission tiers
-│   ├── session.py        # session lifecycle management
-│   └── database.py       # SQLite setup + queries
-├── agent/                ← [Person 2] agent logic
-│   ├── agent.py          # Gemini agent runner
-│   ├── prompts.py        # system prompts, task templates
-│   └── scenarios.py      # demo scenario definitions
-├── data/                 ← [Person 2] mock finance data
-│   ├── billing.json      # mock billing records
-│   ├── contracts.json    # mock contract terms
-│   └── seed.py           # load seed data into DB
-├── dashboard/            ← [Person 3] visualization
-│   ├── app.py            # Streamlit main app
-│   └── metrics.py        # scoring calculations, chart data
-├── db/                   # SQLite files (gitignored)
-├── requirements.txt
-├── run.py                # single entrypoint: starts API + opens dashboard
-└── README.md
+┌─────────────────────────────────────────────────────────┐
+│ Gemini Managed Agent  (Antigravity, hosted by Google)    │
+│   env-ID → runtime continuity                            │
+│   AGENTS.md + SKILL.md → skills gated by reputation tier  │
+└───────────────┬──────────────────────────────────────────┘
+                │ calls tools ▼ (Interactions API)
+┌───────────────┴──────────────────────────────────────────┐
+│ RevMem API   (FastAPI · DigitalOcean App Platform)        │
+│   ├─ Context Engine    → Atlas Vector Search retrieval    │
+│   │                       reranked by reputation          │
+│   ├─ Governance Engine → policy → approver routing;       │
+│   │                       reputation tier → allowed tools │
+│   └─ Reputation Engine → outcome-weighted score + tiering  │
+└───────────────┬──────────────────────────────────────────┘
+                │
+        ┌───────┴────────┐          ┌──────────────────────┐
+        │ MongoDB Atlas  │          │ React + Vite UI      │
+        │ memories,      │◄─────────│ live agent-working    │
+        │ sessions,      │  reads   │ view + reputation /   │
+        │ agents, policy,│          │ routing overlays      │
+        │ mock CRM       │          │ + approve button (S3) │
+        └────────────────┘          └──────────────────────┘
 ```
+
+---
+
+## Two Improvement Axes (kept rigorously separate)
+
+**1. Continual learning — the hero (theme-critical, *not* RAG).**
+The agent learns the **ramp lesson** — *"TCV parity is insufficient for ramped deals; reconcile the annual schedule"* — from **its own Session-1 mistake**. The reviewer's correction on the S1 outcome creates one experiential memory. It is retrieved in later sessions via Atlas Vector Search and reranked by reputation-weighted relevance.
+
+**2. Governance — config, framed as a "boundary" (never "doc ingestion").**
+A delegation-of-authority (DOA) policy drives **approver routing** (AM → Controller → CFO/CCO by materiality). Editing the policy re-routes live. This is the *Adaptive Governance* feature, distinct from reputation tiers.
+
+> **Permission tiers** (earned via reputation) = what the *agent* may do unsupervised.
+> **Policy routing** (org-configured) = the org's rules on *who approves what*.
+> Two governance sources, never blurred.
 
 ---
 
@@ -67,260 +102,223 @@ revmem/
 # core/models.py
 
 class Memory(BaseModel):
-    id: str                    # uuid
-    session_id: str            # which session created it
-    agent_id: str              # which agent owns it
-    type: str                  # billing_rule | contract_clause | pipeline_event | fee_pattern
-    content: str               # natural language description
-    metadata: dict             # structured data (amounts, dates, clause refs)
-    relevance_score: float     # starts 0.5, adjusted by outcomes (0.0 - 1.0)
-    access_count: int          # times retrieved
+    id: str
+    session_id: str
+    agent_id: str
+    type: str                  # pricing_field_rule | materiality_threshold | contract_term | crm_record
+    content: str               # natural-language lesson
+    embedding: list[float]     # Atlas Vector Search index
+    metadata: dict             # {deal_type, focus_fields, threshold_usd, source, ...}
+    relevance_score: float     # starts 0.5, adjusted by outcomes (0.0–1.0)
+    access_count: int
     created_at: datetime
     last_used_at: datetime | None
 
+class PolicyRule(BaseModel):
+    id: str
+    description: str           # "diffs < $1k → AM; schedule changes or > $50k → CFO"
+    condition: dict            # {min_usd, max_usd, change_types}
+    route_to: str              # am | controller | cfo | cco
+    version: int               # editing bumps version (live re-routing)
+
 class Session(BaseModel):
-    id: str                    # uuid
+    id: str
     agent_id: str
-    task: str                  # what the agent was asked to do
+    env_id: str | None         # Antigravity environment ID (runtime continuity)
+    task: str
     status: str                # running | completed | failed
-    outcome: dict | None       # structured result (findings, accuracy, etc.)
-    memories_used: list[str]   # memory IDs retrieved during session
-    memories_created: list[str]# memory IDs created during session
+    outcome: dict | None       # {material_caught, false_escalations, routed_correctly, accuracy}
+    memories_used: list[str]
+    memories_created: list[str]
     started_at: datetime
     ended_at: datetime | None
 
 class Agent(BaseModel):
     id: str
     name: str
-    reputation_score: float    # 0.0 - 1.0
+    reputation_score: float    # 0.0–1.0
     total_sessions: int
     successful_sessions: int
     permission_tier: str       # observer | analyst | autonomous
     created_at: datetime
 
 class PermissionTier:
-    OBSERVER = "observer"      # 0.0-0.3: read-only, query memory
-    ANALYST = "analyst"        # 0.3-0.6: write memories, flag anomalies
-    AUTONOMOUS = "autonomous"  # 0.6-1.0: take actions, update pipeline
+    OBSERVER = "observer"      # 0.0–0.3: read + flag/escalate only
+    ANALYST = "analyst"        # 0.3–0.6: + auto-resolve immaterial, execute approved corrections
+    AUTONOMOUS = "autonomous"  # 0.6–1.0: + auto-reconcile policy-covered fixes; escalate only judgment calls
 ```
 
 ---
 
-## API Interface (Contract Between All 3 People)
+## Agent Tools (reputation-gated via SKILL.md, enforced server-side)
 
-```python
-# What You build, what Person 2 calls, what Person 3 reads from
+| Tool | Purpose | Tier gate |
+|------|---------|-----------|
+| `get_contract(deal_id)` / `get_crm_record(deal_id)` | Fetch structured order form + CRM record | any |
+| `retrieve_context(deal_type, query)` | Atlas vector retrieval of experiential memories + active policy | any |
+| `route_for_approval(discrepancy, recommended_approver)` | Governance engine returns approver per policy; emits approval request | any |
+| `write_crm(deal_id, corrected_fields)` | Reconcile CRM to the signed contract | **ANALYST+** (denied below → "escalate instead") |
+| `log_outcome(session_id, decisions, result)` | Close session → triggers reputation + relevance updates | any |
+| `store_memory(...)` | Persist an experiential lesson | **ANALYST+** |
 
-# Memory operations
-POST   /api/memory              # store a new memory
-GET    /api/memory/retrieve     # query memories (type, keywords, limit)
-PATCH  /api/memory/{id}/score   # update relevance score
-
-# Session operations  
-POST   /api/session             # start a new session
-PATCH  /api/session/{id}        # update session (outcome, status)
-GET    /api/sessions            # list all sessions
-
-# Agent operations
-POST   /api/agent               # register agent
-GET    /api/agent/{id}          # get agent + reputation + permissions
-GET    /api/agent/{id}/reputation/history  # reputation over time
-
-# Feedback loop
-POST   /api/feedback            # log outcome → updates memory scores + reputation
-```
+Each session, RevMem generates a **tier-scoped `SKILL.md`**: higher reputation declares more skills → broader autonomy. The Governance Engine re-checks tier at the tool layer as defense-in-depth.
 
 ---
 
-## Core Python Interface
-
-```python
-# For Person 2 to use directly (no HTTP needed, same process)
-
-from core.memory import MemoryStore
-from core.reputation import ReputationEngine
-from core.session import SessionManager
-
-# Start session
-session = session_mgr.start(agent_id="agent-1", task="Find fee leakage in Q2 billing")
-
-# Retrieve relevant context
-memories = memory_store.retrieve(
-    query="fee discrepancy billing",
-    memory_type="fee_pattern",
-    limit=5
-)
-# Returns memories sorted by relevance_score (highest first)
-
-# Store new memory
-memory_store.store(
-    session_id=session.id,
-    agent_id="agent-1",
-    type="fee_pattern",
-    content="Vendor Acme charges 2.5% processing fee on invoices over $50K, but contract Section 4.2 caps at 2.0%",
-    metadata={"vendor": "Acme", "expected_rate": 0.02, "actual_rate": 0.025, "clause": "4.2"}
-)
-
-# End session with outcome
-session_mgr.complete(
-    session_id=session.id,
-    outcome={"leakages_found": 3, "total_leakages": 3, "accuracy": 1.0}
-)
-
-# This automatically triggers:
-# 1. Reputation update (success → score goes up)
-# 2. Memory relevance update (used memories get score bump)
-# 3. Permission tier recalculation
-```
-
----
-
-## Reputation Algorithm
+## Reputation & Retrieval Algorithms
 
 ```
 After each session:
+  success_rate    = successful_sessions / total_sessions
+  recent_accuracy = correct material catches + correct routing − false escalations (recent window)
+  reputation      = 0.6*success_rate + 0.3*recent_accuracy + 0.1*efficiency_bonus
+  reputation      = clamp(reputation, 0.0, 1.0)
 
-  success_rate = agent.successful_sessions / agent.total_sessions
-  
-  # Weighted score: recent sessions matter more
-  reputation = 0.6 * success_rate + 0.3 * recent_accuracy + 0.1 * efficiency_bonus
-  
-  # Clamp to [0, 1]
-  agent.reputation_score = clamp(reputation, 0.0, 1.0)
-  
-  # Update permission tier
-  if reputation < 0.3: tier = OBSERVER
-  elif reputation < 0.6: tier = ANALYST  
-  else: tier = AUTONOMOUS
+  tier = OBSERVER if rep < 0.3 else ANALYST if rep < 0.6 else AUTONOMOUS
 
 Memory relevance update:
-  For each memory used in session:
-    if session succeeded:
-      memory.relevance_score = min(1.0, score + 0.1)
-    else:
-      memory.relevance_score = max(0.0, score - 0.05)
-  
-  # Unused memories slowly decay
-  For memories not used in 3+ sessions:
-    memory.relevance_score *= 0.95
+  for each memory used in session:
+    relevance_score += 0.1 if session succeeded else -0.05  (clamped 0..1)
+  unused for 3+ sessions: relevance_score *= 0.95
+
+Retrieval rerank (Context Engine):
+  score = α*cosine_similarity + β*relevance_score + γ*recency      # α=0.5, β=0.4, γ=0.1
 ```
+
+This is real reranking driven by Atlas vector search — not keyword matching.
 
 ---
 
-## Demo Scenario Script
+## Demo Scenario — behavior-first
 
-### Session 1: Cold Start (Agent reputation = 0.1, tier = OBSERVER)
+**Deal:** Acme Corp signs a 3-year SaaS subscription (Enterprise Platform, 1,000 seats). The **signed order form is the source of truth**; Salesforce holds the stale deal-desk quote.
 
-**Task**: "Analyze Q2 billing data for fee discrepancies"
+**The hero mismatch (Acme):**
 
-Agent behavior:
-- No relevant memories → retrieves generic context or nothing
-- Slowly works through billing records
-- Finds 1 of 3 fee leakages (misses 2)
-- Stores 5-6 memories (some useful, some noise)
+| Field | Signed contract | Salesforce (stale) | Verdict |
+|-------|-----------------|--------------------|---------|
+| Seats | 1,000 | 1,000 | match |
+| **TCV** | **$450,000** | **$450,000** | **match ← the trap** |
+| **Annual schedule** | **$100k / $150k / $200k (ramped)** | **$150k / $150k / $150k (flat)** | **MISMATCH — material** |
+| Discount | 10% | 10% | match |
+| Y1 monthly invoice | $8,333.33 | $8,333.00 | $0.33 rounding — immaterial |
 
-**Outcome**: `{accuracy: 0.33, leakages_found: 1, total: 3}`
-→ Reputation stays low (~0.2)
+The trap: **TCV reconciles, so a naive total-check passes.** The ramp restructuring wrecks Year-1 revenue and ARR timing (material), while the $0.33 artifact tempts an over-flag.
 
-### Session 2: Learning (Agent reputation = 0.2, tier = OBSERVER)
+### Session 1 — Cold start (rep 0.1, OBSERVER)
+No prior deals → RevMem has genuinely nothing learned (the weakness is *real*, not faked). Agent sees TCV matches → "looks fine," then escalates the **$0.33 rounding** to the CFO (no routing rule yet) and **misses the ramp**. Outcome logged; reviewer correction → creates the one experiential memory.
+**Outcome:** `{material_caught: 0/1, false_escalations: 1, accuracy: 0.0}` → rep ~0.2, OBSERVER.
 
-**Task**: "Analyze Q3 billing data for fee discrepancies"
+### Session 2 — Same Acme contract (rep 0.2, OBSERVER)
+Retrieves the ramp memory → **ignores the rounding, catches the ramp, escalates only that** to the correct approver. **Permission tier unchanged** — isolating the variable: the improvement is **pure RevMem context**, not expanded permissions.
+**Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.5 → **ANALYST**.
 
-Agent behavior:
-- RevMem surfaces: "compare line-item rates vs contract schedule B" (high relevance)
-- Agent faster, more focused
-- Finds 2 of 3 leakages
-- Stores 2-3 refined memories
+### Session 3 — LIVE, new Globex contract (rep ~0.5, ANALYST)
+Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $360k matches again). The lesson **generalizes** (keyed on `deal_type`, not Acme's numbers). At ANALYST tier the agent **auto-reconciles the ramp into CRM itself**.
+**Live flourish:** edit the governance boundary on stage ($1k → $5k threshold) and re-run to show routing shift in real time.
+**Optional judgment twist:** Globex contract has a 25% discount vs deal-desk max 20% → agent auto-fixes the ramp **but correctly escalates the over-authority discount**.
+**Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.65 → **AUTONOMOUS**.
 
-**Outcome**: `{accuracy: 0.67, leakages_found: 2, total: 3}`
-→ Reputation rises (~0.45), tier upgrades to ANALYST
+Reputation track: **0.1 → 0.2 → 0.5 → 0.65** · tiers **OBSERVER → OBSERVER → ANALYST → AUTONOMOUS**.
 
-### Session 3: Competent (Agent reputation = 0.45, tier = ANALYST) — LIVE DEMO
+The two transitions cleanly separate the two effects:
+- **S1 → S2:** smarter context, **same permissions** (isolates "RevMem made it smarter").
+- **S2 → S3:** permissions **expand**, unlocking new actions.
 
-**Task**: "Analyze Q4 billing data and flag pipeline impacts"
+---
 
-Agent behavior:
-- RevMem surfaces highly relevant fee patterns from Sessions 1-2
-- Agent finds 3 of 3 leakages quickly
-- New permission: can now flag pipeline impacts (ANALYST tier)
-- Stores refined, high-value memories
+## How It Scores the Rubric
 
-**Outcome**: `{accuracy: 1.0, leakages_found: 3, total: 3}`
-→ Reputation rises (~0.65), tier upgrades to AUTONOMOUS
+| Criterion | Weight | Our story |
+|-----------|--------|-----------|
+| **Technicality** | 40% | Antigravity managed agent + env-ID statefulness + Atlas vector reranking + governance/reputation engine. Hard to recreate. |
+| **Creativity & Originality** | 25% | Governed, reputation-earned autonomy in finance — not a wrapper chatbot. |
+| **Live Demo** | 20% | S1/S2 pre-run; S3 live with recorded fallback. |
+| **Future Potential** | 15% | The missing infra layer for safely deploying improving agents in regulated domains. |
 
-### Dashboard shows:
-- Reputation chart: 0.1 → 0.2 → 0.45 → 0.65 (line going up)
-- Accuracy chart: 33% → 67% → 100%
-- Memory quality: noise ratio decreasing
-- Permission tier: OBSERVER → ANALYST → AUTONOMOUS
+---
+
+## Repo Structure
+
+```
+revmem/
+├── api/                  ← [Person B] FastAPI server (deploys to DigitalOcean)
+│   ├── main.py
+│   └── routes.py
+├── core/                 ← [Person B] memory + governance + reputation
+│   ├── models.py         # Pydantic models (shared)
+│   ├── context.py        # Atlas vector retrieval + reranking
+│   ├── governance.py     # policy → routing; tier → allowed tools; SKILL.md generation
+│   ├── reputation.py     # score + tier
+│   ├── session.py        # lifecycle + outcome logging
+│   └── atlas.py          # MongoDB Atlas client + vector index
+├── agent/                ← [Person A] Antigravity integration
+│   ├── runner.py         # Interactions API calls, env-ID threading
+│   ├── AGENTS.md         # agent persona
+│   ├── SKILL.md          # tier-scoped skills (generated per session)
+│   └── scenarios.py      # Acme / Globex scripted scenarios + expected outcomes
+├── data/                 ← [Person B] mock finance data
+│   ├── contracts.json    # Acme + Globex signed order forms
+│   ├── salesforce.json   # stale CRM records
+│   ├── policy.json       # DOA policy rules
+│   └── seed.py
+├── ui/                   ← [Person C] React + Vite
+│   ├── src/AgentView.tsx # live agent-working view (the main feature)
+│   └── src/overlays/     # reputation + routing overlays, approve button
+├── requirements.txt
+└── README.md
+```
 
 ---
 
 ## Work Split
 
-### You — Core Engine (hours 0-16)
+### Person A — Antigravity owner (starts hour 0, highest risk)
+1. Interactions API: spin up a managed agent, confirm a round-trip call (**by hour 4**)
+2. env-ID threading for cross-session continuity
+3. `AGENTS.md` persona + tier-scoped `SKILL.md` generation
+4. Tool wiring to RevMem API
+5. Acme / Globex scenario scripting + expected outcomes
+6. Local-Gemini-loop fallback if Antigravity isn't working by hour 8
 
-**Priority order:**
-1. `core/models.py` — Pydantic models (30 min)
-2. `core/database.py` — SQLite schema + basic CRUD (1h)
-3. `core/memory.py` — store + retrieve with relevance sorting (2h)
-4. `core/reputation.py` — score calculation + tier mapping (1h)
-5. `core/session.py` — session lifecycle + outcome logging (1h)
-6. `api/routes.py` — FastAPI endpoints (1h)
-7. `api/main.py` — app setup (30 min)
-8. Integration testing with Person 2's agent (2h)
-9. Bug fixes + polish (remaining time)
+### Person B — RevMem core + API (hour 0–16)
+1. `core/models.py` (30m)
+2. `core/atlas.py` — Atlas client + vector index (1h)
+3. `core/context.py` — retrieve + rerank (2h)
+4. `core/governance.py` — policy routing + tier gating + SKILL.md (2h)
+5. `core/reputation.py` — score + tier (1h)
+6. `core/session.py` — lifecycle + outcome → triggers updates (1h)
+7. `api/` — FastAPI endpoints; deploy to DigitalOcean (1.5h)
+8. `data/` — Acme + Globex contracts, stale CRM, DOA policy, seed (2h)
+9. Integration with Person A (2h)
 
-### Person 2 — Agent + Data (hours 0-16)
-
-**Priority order:**
-1. `data/billing.json` + `data/contracts.json` — mock data from domain knowledge (2h)
-2. `agent/prompts.py` — system prompt for fee analysis agent (1h)
-3. `agent/agent.py` — Gemini agent that calls RevMem (3h)
-4. `agent/scenarios.py` — scripted demo scenarios with expected outcomes (2h)
-5. `data/seed.py` — seed DB with initial data (30 min)
-6. Demo script writing + narrative (2h)
-7. Integration with core engine (2h)
-
-**Needs from finance teammate ASAP:**
-- Real fee leakage examples → becomes mock data
-- Permission tier names → becomes demo narrative
-- Billing rule / contract clause examples → becomes seed memories
-
-### Person 3 — Dashboard + Scoring (hours 0-16)
-
-**Priority order:**
-1. `dashboard/app.py` — Streamlit skeleton with 4 panels (2h)
-   - Reputation chart (line over time)
-   - Accuracy chart (bar per session)
-   - Memory table (type, content, relevance score)
-   - Session log (task, outcome, tier)
-2. `dashboard/metrics.py` — read from SQLite, compute display data (2h)
-3. Polish charts + real-time refresh (2h)
-4. Relevance scoring refinement (2h)
+### Person C — Agent workflow UI (React + Vite, hour 0–16)
+1. Vite skeleton + live agent-working view (the **main feature**) (3h)
+2. Reputation + routing overlays embedded in the view (2h)
+3. Approve button + live policy-edit control for S3 (2h)
+4. Polish, real-time refresh from RevMem API (3h)
 5. Integration testing (2h)
 
-### Everyone — Last 8 hours
-
+### Everyone — last 8 hours
 | Hours | Activity |
 |-------|----------|
-| 16-18 | Full integration: run 3 sessions end-to-end |
-| 18-20 | Bug fixes, data tuning, demo rehearsal |
-| 20-22 | Record 1-min video, write README |
-| 22-24 | Final polish, rehearse live demo, push to public repo |
+| 16–18 | Full integration: run 3 sessions end-to-end |
+| 18–20 | Bug fixes, scenario tuning, rehearsal |
+| 20–22 | Record 1-min video + S3 fallback recording; README |
+| 22–24 | Final polish, rehearse live S3, push public repo |
 
 ---
 
 ## Timeline Checkpoints
 
-| Hour | Checkpoint | Must Be True |
-|------|-----------|-------------|
-| 4 | **Skeleton** | Models defined, SQLite works, Streamlit shows empty dashboard, Gemini API call works |
-| 8 | **Individual pieces work** | Memory store/retrieve works, agent can analyze mock data, dashboard shows dummy data |
-| 12 | **Integration** | Agent calls RevMem, stores memories, dashboard reads from same DB |
-| 16 | **Demo flow works** | 3 sessions run end-to-end, dashboard shows improvement |
-| 20 | **Polish** | Demo rehearsed, edge cases handled, looks clean |
-| 24 | **Ship** | Video recorded, README written, repo public |
+| Hour | Checkpoint | Must be true |
+|------|-----------|--------------|
+| 4 | **Skeleton** | Antigravity round-trip call works; Atlas connected; React shell renders; models defined |
+| 8 | **Pieces work** | Retrieve+rerank works; agent reconciles mock data; UI shows a live run. **Antigravity go/no-go → else local-loop fallback** |
+| 12 | **Integration** | Agent calls RevMem tools, stores memory, UI reads from same store |
+| 16 | **Demo flow** | 3 sessions run end-to-end; improvement + permission expansion visible |
+| 20 | **Polish** | S3 rehearsed; edge cases handled; routing live-edit works |
+| 24 | **Ship** | Video recorded, README written, repo public, DO deploy live |
 
 ---
 
@@ -328,24 +326,24 @@ Agent behavior:
 
 | Risk | Mitigation |
 |------|-----------|
-| Gemini API rate limits / downtime | Cache responses. Pre-run sessions, replay in demo if needed |
-| 3 people merge conflicts | Each person owns a directory. Minimal shared files (only `models.py`) |
-| Agent doesn't "improve" convincingly | Hardcode session 1 to use NO memory. Session 3 retrieval is natural. Improvement is real but guided |
-| Dashboard looks ugly | Streamlit default theme is fine. Don't customize — ship |
-| Running out of time | Cut in order: Computer Use → graph relationships → advanced reranking. Core demo = memory + reputation + dashboard |
+| Antigravity flakes / unfamiliar | One owner from hour 0; go/no-go at hour 8; **local-Gemini-loop fallback** (keeps themes, forfeits $5k only) |
+| Live S3 breaks | Pre-run S1/S2; recorded S3 fallback |
+| Reads as a "dashboard project" (disqualifying) | Foreground agent behavior; overlays embedded, never standalone |
+| Reads as "basic RAG" (disqualifying) | Lead with the experiential learning loop; call policy a "governance boundary" |
+| Hosted agent can't reach local RevMem | RevMem API on DigitalOcean; Atlas is cloud — nothing local in the critical path |
+| Atlas vector index latency | Pre-embed seed memories; cache S1/S2 runs |
 
 ---
 
 ## Tech Stack
 
 ```
-Python 3.11+
-FastAPI          — API server
-SQLite           — database (via sqlite3 stdlib)
-Pydantic         — data models
-google-genai     — Gemini API
-Streamlit        — dashboard
-uvicorn          — ASGI server
+Python 3.11+      — RevMem core + API (uv)
+FastAPI           — API server (hosted on DigitalOcean App Platform)
+MongoDB Atlas     — document + Vector Search (single store)
+Pydantic          — data models
+google-genai      — Gemini Interactions API (Antigravity managed agents)
+React + Vite       — agent workflow UI (NOT Streamlit)
 ```
 
 ---
@@ -353,20 +351,16 @@ uvicorn          — ASGI server
 ## Quick Start (for README)
 
 ```bash
-# Install
-pip install -r requirements.txt
+# RevMem API
+uv pip install -r requirements.txt
+export GEMINI_API_KEY=...           # aistudio.google.com/api-keys
+export MONGODB_ATLAS_URI=...        # Atlas Sandbox (GCP)
+uv run python -m data.seed          # seed contracts, CRM, policy, memories
+uv run uvicorn api.main:app         # → RevMem API (deploy target: DigitalOcean)
 
-# Set API key
-export GEMINI_API_KEY=your_key
-
-# Seed mock data
-python -m data.seed
-
-# Run everything
-python run.py
-# → API at http://localhost:8000
-# → Dashboard at http://localhost:8501
+# UI
+cd ui && pnpm install && pnpm dev   # → React agent view
 
 # Run demo sessions
-python -m agent.scenarios
+uv run python -m agent.scenarios    # Acme S1, Acme S2, Globex S3
 ```
