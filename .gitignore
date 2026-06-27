@@ -34,3 +34,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# revmem local approval store (scaffold)
+.revmem_approvals.json
+.revmem_approvals.json.lock
