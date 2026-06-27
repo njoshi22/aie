@@ -72,3 +72,20 @@ class Agent(BaseModel):
     successful_sessions: int = 0
     permission_tier: str = PermissionTier.OBSERVER
     created_at: datetime = Field(default_factory=_now)
+
+
+class ApprovalStatus:
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class Approval(BaseModel):
+    id: str = Field(default_factory=_uuid)
+    deal_id: str
+    discrepancy: dict[str, Any]
+    approver_role: str
+    status: str = ApprovalStatus.PENDING
+    token: str = Field(default_factory=_uuid)
+    created_at: datetime = Field(default_factory=_now)
+    decided_at: datetime | None = None

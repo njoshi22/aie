@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.models import PermissionTier, PolicyRule
+from core.models import ApprovalStatus, PermissionTier, PolicyRule
 
 _BASE_TOOLS = {"get_contract", "get_crm_record", "retrieve_context",
                "route_for_approval", "log_outcome"}
@@ -38,6 +38,28 @@ def allowed_tools(tier: str) -> set[str]:
 
 def can_use(tier: str, tool: str) -> bool:
     return tool in TOOLS_BY_TIER[tier]
+
+
+class WriteDecision:
+    ALLOW = "allow"
+    NEEDS_APPROVAL = "needs_approval"
+    DENY = "deny"
+
+
+JUDGMENT_CHANGE_TYPES = {"discount_over_authority"}
+
+
+def authorize_write(tier: str, discrepancy: dict[str, Any], approval_status: str | None = None) -> str:
+    if tier == PermissionTier.OBSERVER:
+        return WriteDecision.DENY
+    if approval_status == ApprovalStatus.APPROVED:
+        return WriteDecision.ALLOW
+    if approval_status == ApprovalStatus.REJECTED:
+        return WriteDecision.DENY
+    change_type = discrepancy.get("change_type")
+    if tier == PermissionTier.AUTONOMOUS and change_type not in JUDGMENT_CHANGE_TYPES:
+        return WriteDecision.ALLOW  # policy-covered self-reconcile
+    return WriteDecision.NEEDS_APPROVAL
 
 
 def generate_skill_md(tier: str) -> str:

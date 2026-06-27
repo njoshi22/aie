@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from core import context, database, governance, session
-from core.models import Agent, Memory, MemoryType
+from core.models import Agent, Approval, ApprovalStatus, Memory, MemoryType
 from data import seed
 
 router = APIRouter()
@@ -53,6 +56,7 @@ class CreateMemory(BaseModel):
 
 
 class Discrepancy(BaseModel):
+    deal_id: str = ""
     amount_usd: float = 0.0
     change_type: str | None = None
 
@@ -61,6 +65,8 @@ class CrmWrite(BaseModel):
     agent_id: str
     deal_id: str
     fields: dict[str, Any]
+    discrepancy: dict[str, Any] = {}
+    approval_id: str | None = None
 
 
 class PolicyEdit(BaseModel):
@@ -166,22 +172,87 @@ def retrieve_memory(agent_id: str, query: str, request: Request,
 
 @router.post("/route_for_approval")
 def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
-    rules = database.list_policy(_conn(request))
-    return {"route_to": governance.route(body.model_dump(), rules)}
+    conn = _conn(request)
+    approver = governance.route(body.model_dump(), database.list_policy(conn))
+    approval = Approval(deal_id=body.deal_id, discrepancy=body.model_dump(),
+                        approver_role=approver)
+    database.insert_approval(conn, approval)
+    base = os.getenv("REVMEM_BASE_URL", "")
+    link = f"{base}/approvals/{approval.id}?token={approval.token}"
+    print(f"[approval] route to {approver}: {link}")  # email is stubbed for the demo
+    return {"approval_id": approval.id, "token": approval.token, "route_to": approver,
+            "status": approval.status, "approval_link": link}
 
 
 @router.post("/crm/write")
 def write_crm(body: CrmWrite, request: Request) -> dict[str, Any]:
     conn = _conn(request)
-    a = database.get_agent(conn, body.agent_id)
-    if not a:
+    agent = database.get_agent(conn, body.agent_id)
+    if not agent:
         raise HTTPException(404, "unknown agent")
-    if not governance.can_use(a.permission_tier, "write_crm"):
-        raise HTTPException(403, f"tier {a.permission_tier} cannot write_crm — escalate instead")
+    approval_status = None
+    if body.approval_id:
+        appr = database.get_approval(conn, body.approval_id)
+        approval_status = appr.status if appr else None
+    decision = governance.authorize_write(agent.permission_tier, body.discrepancy,
+                                          approval_status)
+    if decision != governance.WriteDecision.ALLOW:
+        raise HTTPException(403, f"write not allowed ({decision}) — route_for_approval first")
     record = database.get_crm(conn, body.deal_id) or {}
     record.update(body.fields)
     database.upsert_crm(conn, body.deal_id, record)
-    return {"ok": True, "crm": record}
+    return {"ok": True, "decision": decision, "crm": record}
+
+
+_APPROVAL_HTML = """<!doctype html><html><head><title>RevMem Approval</title></head>
+<body style="font-family:system-ui;max-width:34rem;margin:4rem auto">
+<h2>Pricing reconciliation approval</h2>
+<p><b>Deal:</b> {deal_id} &nbsp; <b>Routed to:</b> {approver_role}</p>
+<pre>{discrepancy}</pre>
+<p><b>Status:</b> {status}</p>
+{actions}
+</body></html>"""
+
+
+@router.get("/approvals/{approval_id}", response_class=HTMLResponse)
+def approval_page(approval_id: str, token: str, request: Request) -> str:
+    a = database.get_approval(_conn(request), approval_id)
+    if not a or a.token != token:
+        raise HTTPException(404, "unknown approval")
+    if a.status == ApprovalStatus.PENDING:
+        actions = (f'<form method="post" action="/approvals/{a.id}/decision">'
+                   f'<input type="hidden" name="token" value="{a.token}">'
+                   f'<button name="decision" value="approve">Approve</button> '
+                   f'<button name="decision" value="reject">Reject</button></form>')
+    else:
+        actions = "<p><i>Decision recorded.</i></p>"
+    return _APPROVAL_HTML.format(deal_id=a.deal_id, approver_role=a.approver_role,
+                                 discrepancy=json.dumps(a.discrepancy, indent=2),
+                                 status=a.status, actions=actions)
+
+
+@router.post("/approvals/{approval_id}/decision")
+def approval_decision(approval_id: str, request: Request,
+                      decision: str = Form(...), token: str = Form(...)) -> dict[str, Any]:
+    conn = _conn(request)
+    a = database.get_approval(conn, approval_id)
+    if not a or a.token != token:
+        raise HTTPException(404, "unknown approval")
+    if a.status != ApprovalStatus.PENDING:
+        return a.model_dump(mode="json")
+    a.status = ApprovalStatus.APPROVED if decision == "approve" else ApprovalStatus.REJECTED
+    a.decided_at = datetime.now(timezone.utc)
+    database.update_approval(conn, a)
+    return a.model_dump(mode="json")
+
+
+@router.get("/approvals/{approval_id}/status")
+def approval_status(approval_id: str, request: Request) -> dict[str, Any]:
+    # JSON status — the AGENT polls this between route_for_approval and write_crm.
+    a = database.get_approval(_conn(request), approval_id)
+    if not a:
+        raise HTTPException(404, "unknown approval")
+    return a.model_dump(mode="json")
 
 
 @router.get("/contracts/{deal_id}")

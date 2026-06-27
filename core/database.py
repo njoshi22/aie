@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.models import Agent, Memory, PolicyRule, Session
+from core.models import Agent, Approval, Memory, PolicyRule, Session
 
 DB_PATH = Path("db/revmem.db")
 
@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS policy_rules (
 );
 CREATE TABLE IF NOT EXISTS crm_records (
   deal_id TEXT PRIMARY KEY, data TEXT
+);
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY, deal_id TEXT, discrepancy TEXT, approver_role TEXT,
+  status TEXT, token TEXT, created_at TEXT, decided_at TEXT
 );
 """
 
@@ -218,3 +222,33 @@ def upsert_crm(conn: sqlite3.Connection, deal_id: str, data: dict[str, Any]) -> 
 def get_crm(conn: sqlite3.Connection, deal_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT data FROM crm_records WHERE deal_id=?", (deal_id,)).fetchone()
     return json.loads(row["data"]) if row else None
+
+
+# --- approvals ---
+def insert_approval(conn: sqlite3.Connection, a: Approval) -> None:
+    conn.execute(
+        "INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?)",
+        (a.id, a.deal_id, json.dumps(a.discrepancy), a.approver_role, a.status,
+         a.token, a.created_at.isoformat(),
+         a.decided_at.isoformat() if a.decided_at else None),
+    )
+    conn.commit()
+
+
+def get_approval(conn: sqlite3.Connection, approval_id: str) -> Approval | None:
+    row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+    if not row:
+        return None
+    return Approval(id=row["id"], deal_id=row["deal_id"],
+                    discrepancy=json.loads(row["discrepancy"]),
+                    approver_role=row["approver_role"], status=row["status"],
+                    token=row["token"], created_at=_dt(row["created_at"]),
+                    decided_at=_dt(row["decided_at"]))
+
+
+def update_approval(conn: sqlite3.Connection, a: Approval) -> None:
+    conn.execute(
+        "UPDATE approvals SET status=?, decided_at=? WHERE id=?",
+        (a.status, a.decided_at.isoformat() if a.decided_at else None, a.id),
+    )
+    conn.commit()
