@@ -66,7 +66,7 @@ A new customer is signed and sends over the **finalized, signed contract**. An a
 | Structured Finance Memory | SQLite schema for pricing rules, contract terms, materiality thresholds (embeddings stored per memory) | Consolidates observations into reusable knowledge |
 | Self-Improving Retrieval | Embedding-cosine retrieval reranked by reputation-weighted relevance (`α·cosine + β·relevance + γ·recency`) | Learns what context actually helps |
 | Agent Identity & Reputation | Dynamic reputation score from observed reconciliation outcomes | Reputation grows with demonstrated competence |
-| Adaptive Governance | Policy-driven approver routing + permission tiers that expand with reputation | Self-adjusting trust boundaries |
+| Adaptive Governance | Policy-driven approver routing + permission tiers that expand with reputation + a server-enforced approval gate on CRM writes | Self-adjusting trust boundaries the agent can't bypass |
 | Audit & Observability | Trace of memory usage, routing decisions, and outcomes | Enables evaluation of learning quality |
 | Feedback & Reflection | Outcome logging that updates memory relevance + reputation | Core mechanism for continuous improvement |
 
@@ -78,11 +78,11 @@ A new customer is signed and sends over the **finalized, signed contract**. An a
 
 - **Agent Runtime**: Gemini **Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via the Interactions API. Stateful sessions via environment ID; skills declared in `AGENTS.md` / `SKILL.md`.
 - **Memory Store**: SQLite (single file, `db/revmem.db`) with per-memory embeddings for cosine retrieval.
-- **Context Engine**: vector retrieval + outcome-based reranking.
+- **Context Engine**: embedding retrieval + outcome-based reranking.
 - **Reputation & Identity Module**: reputation updater driven by observed success/failure; permission-tier mapping.
-- **Governance Engine**: policy → approver routing; reputation tier → allowed tools; per-session `SKILL.md` generation.
-- **Interface Layer**: FastAPI run locally, exposed via an ngrok tunnel — tools the hosted agent calls.
-- **UI**: React + Vite — a live agent-working view (the main feature), with reputation/routing overlays embedded.
+- **Governance Engine**: policy → approver routing; reputation tier → allowed tools; per-session `SKILL.md` generation; **server-enforced write-approval gate (`authorize_write`)**.
+- **Interface Layer**: FastAPI run locally, exposed via an ngrok tunnel — tools the hosted agent calls, plus the served approval page.
+- **Agent view**: a Rich CLI live transcript (the main feature). The only web surface is a single FastAPI-served CFO approval page reached from an email link.
 
 **Data Flow**:
 Agent receives signed contract → calls RevMem tools (retrieve context, reconcile, route) → outcome logged → memory relevance + reputation updated → future retrievals and permissions improve automatically.
@@ -131,6 +131,7 @@ Two statefulness layers tell the story: Antigravity's env-ID gives raw continuit
 - Dynamic reputation scoring from observed behavior (correct catches, correct routing, no false escalations)
 - **Permission tiers** earned via reputation (what the *agent* may do unsupervised)
 - **Policy-driven approver routing** (the *org's* rules on who approves what) — a governance boundary, kept distinct from reputation
+- **Server-enforced approval gate**: CRM writes pass through `authorize_write`; the untrusted hosted agent cannot mutate the system of record without an approved record
 - Complete audit trail of memory usage and decisions
 
 ---
@@ -141,9 +142,9 @@ Two statefulness layers tell the story: Antigravity's env-ID gives raw continuit
 - SQLite memory store + embedding-cosine retrieval with reputation reranking
 - Reputation scoring + permission tiers
 - Gemini Managed Agents (Antigravity) runtime with stateful sessions
-- Policy-driven approver routing
+- Policy-driven approver routing + server-enforced approval gate (single served approval page)
 - Three sessions demonstrating measurable improvement + expanding autonomy
-- React agent-working view (overlays embedded)
+- Rich CLI agent-working view (overlays embedded)
 
 **Nice to Have**: live policy-edit re-routing on stage; the over-authority-discount judgment twist in S3; deeper graph relationships.
 

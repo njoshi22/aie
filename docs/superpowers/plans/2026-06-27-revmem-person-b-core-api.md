@@ -4,7 +4,7 @@
 
 **Goal:** Build RevMem's core engine (memory, governance, reputation), a FastAPI tool server, and mock finance data on SQLite, exposed to the hosted Gemini agent via ngrok.
 
-**Architecture:** A Python package with a thin SQLite repository layer (`core/database.py`), pure-Python domain engines (`core/context.py` retrieval+rerank, `core/reputation.py` scoring, `core/governance.py` routing+tier gating, `core/session.py` lifecycle), and a FastAPI app (`api/`) exposing the exact tools the Antigravity agent calls plus the reads the React UI needs. Mock contracts are static JSON; mutable CRM records, policy, agents, sessions and memories live in SQLite.
+**Architecture:** A Python package with a thin SQLite repository layer (`core/database.py`), pure-Python domain engines (`core/context.py` retrieval+rerank, `core/reputation.py` scoring, `core/governance.py` routing+tier gating, `core/session.py` lifecycle), and a FastAPI app (`api/`) exposing the exact tools the Antigravity agent calls plus the reads the Rich CLI needs and the served CFO approval page. Mock contracts are static JSON; mutable CRM records, policy, agents, sessions and memories live in SQLite.
 
 **Tech Stack:** Python 3.11, FastAPI, uvicorn, Pydantic v2, sqlite3 (stdlib), google-genai (embeddings, with deterministic offline fallback), pytest, httpx (FastAPI TestClient).
 
@@ -1494,6 +1494,312 @@ git commit -m "feat: FastAPI tool surface for agent + UI"
 
 ---
 
+### Task 8.5: Approval subsystem + server-enforced write gate
+
+The CRM write must be gated on a **real approval record**, enforced server-side — the hosted agent cannot be trusted to wait. `route_for_approval` creates a pending `Approval` and returns a link; the CFO opens a FastAPI-served page (the one web surface) and decides; `write_crm` calls `governance.authorize_write`, which is the only thing that can mutate CRM.
+
+**Files:**
+- Modify: `core/models.py`, `core/database.py`, `core/governance.py`, `api/routes.py`
+- Test: `tests/test_approval.py`
+
+**Interfaces:**
+- Consumes: everything in Tasks 1–8.
+- Produces:
+  - `Approval` model + `ApprovalStatus{PENDING,APPROVED,REJECTED}`
+  - `database.insert_approval / get_approval / update_approval`
+  - `governance.WriteDecision{ALLOW,NEEDS_APPROVAL,DENY}` and `governance.authorize_write(tier, discrepancy, approval_status=None) -> str`
+  - Endpoints: `POST /route_for_approval` (now creates the record + link), `GET /approvals/{id}` (served HTML), `POST /approvals/{id}/decision` (form), `POST /crm/write` (now gated by `authorize_write`)
+
+- [ ] **Step 1: Add the Approval model (append to `core/models.py`)**
+
+```python
+class ApprovalStatus:
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class Approval(BaseModel):
+    id: str = Field(default_factory=_uuid)
+    deal_id: str
+    discrepancy: dict
+    approver_role: str
+    status: str = ApprovalStatus.PENDING
+    token: str = Field(default_factory=_uuid)
+    created_at: datetime = Field(default_factory=_now)
+    decided_at: datetime | None = None
+```
+
+- [ ] **Step 2: Add the approvals table + CRUD (`core/database.py`)**
+
+Add `Approval` to the models import, add this `CREATE TABLE` to the `SCHEMA` string, and append the three functions:
+
+```python
+# add inside the SCHEMA triple-quoted string:
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY, deal_id TEXT, discrepancy TEXT, approver_role TEXT,
+  status TEXT, token TEXT, created_at TEXT, decided_at TEXT
+);
+```
+
+```python
+# append to core/database.py (and add Approval to the `from core.models import ...` line)
+def insert_approval(conn: sqlite3.Connection, a: Approval) -> None:
+    conn.execute(
+        "INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?)",
+        (a.id, a.deal_id, json.dumps(a.discrepancy), a.approver_role, a.status,
+         a.token, a.created_at.isoformat(),
+         a.decided_at.isoformat() if a.decided_at else None),
+    )
+    conn.commit()
+
+
+def get_approval(conn: sqlite3.Connection, approval_id: str) -> Approval | None:
+    row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+    if not row:
+        return None
+    return Approval(id=row["id"], deal_id=row["deal_id"],
+                    discrepancy=json.loads(row["discrepancy"]),
+                    approver_role=row["approver_role"], status=row["status"],
+                    token=row["token"], created_at=_dt(row["created_at"]),
+                    decided_at=_dt(row["decided_at"]))
+
+
+def update_approval(conn: sqlite3.Connection, a: Approval) -> None:
+    conn.execute(
+        "UPDATE approvals SET status=?, decided_at=? WHERE id=?",
+        (a.status, a.decided_at.isoformat() if a.decided_at else None, a.id),
+    )
+    conn.commit()
+```
+
+- [ ] **Step 3: Add the write authorization decision (`core/governance.py`)**
+
+```python
+# add ApprovalStatus to the `from core.models import ...` line, then append:
+class WriteDecision:
+    ALLOW = "allow"
+    NEEDS_APPROVAL = "needs_approval"
+    DENY = "deny"
+
+
+JUDGMENT_CHANGE_TYPES = {"discount_over_authority"}
+
+
+def authorize_write(tier: str, discrepancy: dict, approval_status: str | None = None) -> str:
+    if tier == PermissionTier.OBSERVER:
+        return WriteDecision.DENY
+    if approval_status == ApprovalStatus.APPROVED:
+        return WriteDecision.ALLOW
+    if approval_status == ApprovalStatus.REJECTED:
+        return WriteDecision.DENY
+    change_type = discrepancy.get("change_type")
+    if tier == PermissionTier.AUTONOMOUS and change_type not in JUDGMENT_CHANGE_TYPES:
+        return WriteDecision.ALLOW  # policy-covered self-reconcile
+    return WriteDecision.NEEDS_APPROVAL
+```
+
+- [ ] **Step 4: Write the failing tests**
+
+```python
+# tests/test_approval.py
+import pytest
+from fastapi.testclient import TestClient
+
+from api.main import create_app
+from core import database, governance
+from core.governance import WriteDecision
+from core.models import ApprovalStatus, PermissionTier
+
+
+def test_authorize_write_decisions():
+    sched = {"change_type": "schedule_change", "amount_usd": 0}
+    disc = {"change_type": "discount_over_authority", "amount_usd": 5}
+    assert governance.authorize_write(PermissionTier.OBSERVER, sched) == WriteDecision.DENY
+    assert governance.authorize_write(PermissionTier.ANALYST, sched) == WriteDecision.NEEDS_APPROVAL
+    assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.APPROVED) == WriteDecision.ALLOW
+    assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.REJECTED) == WriteDecision.DENY
+    assert governance.authorize_write(PermissionTier.AUTONOMOUS, sched) == WriteDecision.ALLOW
+    assert governance.authorize_write(PermissionTier.AUTONOMOUS, disc) == WriteDecision.NEEDS_APPROVAL
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("REVMEM_DB", str(tmp_path / "a.db"))
+    monkeypatch.setattr("core.context.embed_text", lambda t: [1.0, 0.0])
+    app = create_app()
+    with TestClient(app) as c:
+        yield c
+
+
+def _make_analyst(client) -> str:
+    aid = client.post("/agents", json={"name": "A"}).json()["id"]
+    conn = client.app.state.conn
+    agent = database.get_agent(conn, aid)
+    agent.permission_tier = PermissionTier.ANALYST
+    database.update_agent(conn, agent)
+    return aid
+
+
+def test_full_approval_flow(client):
+    aid = _make_analyst(client)
+    disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
+    routed = client.post("/route_for_approval", json=disc).json()
+    assert routed["route_to"] == "cfo" and routed["status"] == "pending"
+    approval_id = routed["approval_id"]
+    tok = routed["approval_link"].split("token=")[1]
+
+    body = {"agent_id": aid, "deal_id": "acme",
+            "fields": {"annual_schedule": [100000, 150000, 200000]},
+            "discrepancy": disc, "approval_id": approval_id}
+    assert client.post("/crm/write", json=body).status_code == 403  # pending → blocked
+
+    page = client.get(f"/approvals/{approval_id}", params={"token": tok})
+    assert page.status_code == 200 and "Approve" in page.text
+    dec = client.post(f"/approvals/{approval_id}/decision",
+                      data={"decision": "approve", "token": tok})
+    assert dec.json()["status"] == "approved"
+
+    assert client.post("/crm/write", json=body).status_code == 200  # approved → allowed
+    assert client.get("/crm/acme").json()["annual_schedule"] == [100000, 150000, 200000]
+```
+
+- [ ] **Step 5: Run to verify it fails**
+
+Run: `uv run pytest tests/test_approval.py -v`
+Expected: `test_authorize_write_decisions` FAILs (`authorize_write` missing) until Step 3 is saved; `test_full_approval_flow` FAILs (routes not yet wired).
+
+- [ ] **Step 6: Wire the routes (`api/routes.py`)**
+
+Replace the import header, the `Discrepancy` and `CrmWrite` models, and the `route_for_approval` + `write_crm` handlers; add the approval page + decision handlers:
+
+```python
+# api/routes.py — new imports (replace the existing import block top section)
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
+from pydantic import BaseModel
+
+from core import context, database, governance, session
+from core.models import Agent, Approval, ApprovalStatus, Memory, MemoryType
+from data import seed
+```
+
+```python
+# replace the Discrepancy and CrmWrite models
+class Discrepancy(BaseModel):
+    deal_id: str = ""
+    amount_usd: float = 0.0
+    change_type: str | None = None
+
+
+class CrmWrite(BaseModel):
+    agent_id: str
+    deal_id: str
+    fields: dict
+    discrepancy: dict = {}
+    approval_id: str | None = None
+```
+
+```python
+# replace route_for_approval and write_crm; add the two approval handlers
+@router.post("/route_for_approval")
+def route_for_approval(body: Discrepancy, request: Request) -> dict:
+    conn = _conn(request)
+    approver = governance.route(body.model_dump(), database.list_policy(conn))
+    approval = Approval(deal_id=body.deal_id, discrepancy=body.model_dump(),
+                        approver_role=approver)
+    database.insert_approval(conn, approval)
+    base = os.getenv("REVMEM_BASE_URL", "")
+    link = f"{base}/approvals/{approval.id}?token={approval.token}"
+    print(f"[approval] route to {approver}: {link}")  # email is stubbed for the demo
+    return {"approval_id": approval.id, "route_to": approver,
+            "status": approval.status, "approval_link": link}
+
+
+@router.post("/crm/write")
+def write_crm(body: CrmWrite, request: Request) -> dict:
+    conn = _conn(request)
+    agent = database.get_agent(conn, body.agent_id)
+    if not agent:
+        raise HTTPException(404, "unknown agent")
+    approval_status = None
+    if body.approval_id:
+        appr = database.get_approval(conn, body.approval_id)
+        approval_status = appr.status if appr else None
+    decision = governance.authorize_write(agent.permission_tier, body.discrepancy,
+                                          approval_status)
+    if decision != governance.WriteDecision.ALLOW:
+        raise HTTPException(403, f"write not allowed ({decision}) — route_for_approval first")
+    record = database.get_crm(conn, body.deal_id) or {}
+    record.update(body.fields)
+    database.upsert_crm(conn, body.deal_id, record)
+    return {"ok": True, "decision": decision, "crm": record}
+
+
+_APPROVAL_HTML = """<!doctype html><html><head><title>RevMem Approval</title></head>
+<body style="font-family:system-ui;max-width:34rem;margin:4rem auto">
+<h2>Pricing reconciliation approval</h2>
+<p><b>Deal:</b> {deal_id} &nbsp; <b>Routed to:</b> {approver_role}</p>
+<pre>{discrepancy}</pre>
+<p><b>Status:</b> {status}</p>
+{actions}
+</body></html>"""
+
+
+@router.get("/approvals/{approval_id}", response_class=HTMLResponse)
+def approval_page(approval_id: str, token: str, request: Request) -> str:
+    a = database.get_approval(_conn(request), approval_id)
+    if not a or a.token != token:
+        raise HTTPException(404, "unknown approval")
+    if a.status == ApprovalStatus.PENDING:
+        actions = (f'<form method="post" action="/approvals/{a.id}/decision">'
+                   f'<input type="hidden" name="token" value="{a.token}">'
+                   f'<button name="decision" value="approve">Approve</button> '
+                   f'<button name="decision" value="reject">Reject</button></form>')
+    else:
+        actions = "<p><i>Decision recorded.</i></p>"
+    return _APPROVAL_HTML.format(deal_id=a.deal_id, approver_role=a.approver_role,
+                                 discrepancy=json.dumps(a.discrepancy, indent=2),
+                                 status=a.status, actions=actions)
+
+
+@router.post("/approvals/{approval_id}/decision")
+def approval_decision(approval_id: str, request: Request,
+                      decision: str = Form(...), token: str = Form(...)) -> dict:
+    conn = _conn(request)
+    a = database.get_approval(conn, approval_id)
+    if not a or a.token != token:
+        raise HTTPException(404, "unknown approval")
+    if a.status != ApprovalStatus.PENDING:
+        return a.model_dump(mode="json")
+    a.status = ApprovalStatus.APPROVED if decision == "approve" else ApprovalStatus.REJECTED
+    a.decided_at = datetime.now(timezone.utc)
+    database.update_approval(conn, a)
+    return a.model_dump(mode="json")
+```
+
+- [ ] **Step 7: Run tests + full suite**
+
+Run: `uv run pytest tests/test_approval.py tests/test_api.py -v`
+Expected: PASS (existing `test_write_crm_denied_for_observer` still passes — observer → `DENY` → 403)
+Run: `uv run pytest -v`
+Expected: PASS (whole suite)
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add core/models.py core/database.py core/governance.py api/routes.py tests/test_approval.py
+git commit -m "feat: server-enforced approval gate for CRM writes"
+```
+
+---
+
 ### Task 9: Local run + ngrok exposure
 
 **Files:**
@@ -1547,7 +1853,7 @@ git commit -m "docs: local + ngrok run instructions"
 ## Self-Review
 
 **Spec coverage** (against `ARCHITECTURE.md` Person B scope):
-- models ✓ T1 · SQLite store ✓ T2 · reputation+tier ✓ T3 · session lifecycle+triggers ✓ T4 · retrieve+rerank ✓ T5 · policy routing+tier gating+SKILL.md ✓ T6 · mock data+seed ✓ T7 · FastAPI tool surface ✓ T8 · deploy/run (now ngrok) ✓ T9.
+- models ✓ T1 · SQLite store ✓ T2 · reputation+tier ✓ T3 · session lifecycle+triggers ✓ T4 · retrieve+rerank ✓ T5 · policy routing+tier gating+SKILL.md ✓ T6 · mock data+seed ✓ T7 · FastAPI tool surface ✓ T8 · server-enforced approval gate ✓ T8.5 · deploy/run (now ngrok) ✓ T9.
 - Substrate updated Atlas → SQLite; hosting DO → ngrok, per the latest decision.
 - `pgvector`/Atlas vector search intentionally dropped; semantic signal preserved via `embed_text` + Python cosine (gracefully degrades offline). Logged here so the cut is explicit, not silent.
 
