@@ -115,7 +115,7 @@ ROUTE_FOR_APPROVAL: ToolDefinition = {
             },
             "change_type": {
                 "type": "string",
-                "enum": ["schedule_change", "rounding", "discount_over_authority"],
+                "enum": ["schedule_change", "term_change", "rounding", "discount_over_authority"],
                 "description": "Policy category for routing the discrepancy.",
             },
             "summary": {
@@ -182,7 +182,7 @@ WRITE_CRM: ToolDefinition = {
                     },
                     "change_type": {
                         "type": "string",
-                        "enum": ["schedule_change", "rounding", "discount_over_authority"],
+                        "enum": ["schedule_change", "term_change", "rounding", "discount_over_authority"],
                         "description": "Policy category for routing or approving the correction.",
                     },
                     "summary": {

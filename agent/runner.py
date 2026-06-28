@@ -29,6 +29,8 @@ AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-
 AGENT_API_TIMEOUT_S = 90.0  # per-HTTP-request cap for create/get (each is fast in background mode)
 AGENT_TURN_DEADLINE_S = 300.0  # max wall-clock to await one background agent turn before failing loud
 AGENT_POLL_INTERVAL_S = 3.0  # cadence for polling a backgrounded interaction's status
+MCP_AGENT_ID_HEADER = "x-revmem-agent-id"
+MCP_SESSION_ID_HEADER = "x-revmem-session-id"
 
 
 class ScenarioExpected(TypedDict):
@@ -144,6 +146,28 @@ def _service_allowed_tools(agent_state: JsonObject) -> list[str]:
     if not isinstance(raw, list) or not all(isinstance(tool, str) for tool in raw):
         raise ValueError("RevMem agent response missing allowed_tools")
     return raw
+
+
+def _interaction_tools(agent_id: str, session_id: str, allowed_tool_names: list[str]) -> list[JsonObject]:
+    transport = os.getenv("REVMEM_TOOL_TRANSPORT", "mcp").strip().lower()
+    if transport != "function" and not revmem_client.STUB_MODE and revmem_client.REVMEM_BASE_URL:
+        return [
+            {
+                "mcpServers": [
+                    {
+                        "name": "RevMem",
+                        "streamableHttpTransport": {
+                            "url": f"{revmem_client.REVMEM_BASE_URL}/mcp",
+                            "headers": {
+                                MCP_AGENT_ID_HEADER: agent_id,
+                                MCP_SESSION_ID_HEADER: session_id,
+                            },
+                        },
+                    }
+                ]
+            }
+        ]
+    return get_tools_for_allowed_names(allowed_tool_names)
 
 
 def _debug(enabled: bool, message: str) -> None:
@@ -360,7 +384,7 @@ def run_session(
 
     prompt = build_reconciliation_prompt(deal, allowed_tool_names)
     skill_content = revmem_client.get_skill_md(agent_id)
-    tools = get_tools_for_allowed_names(allowed_tool_names)
+    tools = _interaction_tools(agent_id, session_id, allowed_tool_names)
     environment = build_environment(skill_content, AGENTS_MD)
 
     create_kwargs: dict[str, Any] = {
@@ -439,6 +463,7 @@ def run_session(
                 "previous_interaction_id": interaction.id,
                 "environment": interaction.environment_id,
                 "input": results,
+                "tools": tools,  # tool specs apply per-turn; re-pass or the agent loses them
             },
             "after tool results",
             active_listener,
@@ -527,7 +552,7 @@ def send_feedback(
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     agent_state = revmem_client.get_agent(agent_id)
-    tools = get_tools_for_allowed_names(_service_allowed_tools(agent_state))
+    tools = _interaction_tools(agent_id, session_id, _service_allowed_tools(agent_state))
     prompt = build_feedback_prompt(feedback_text)
 
     create_kwargs: dict[str, Any] = {
@@ -567,7 +592,7 @@ def send_feedback(
 
         interaction = _create_interaction(
             client,
-            {"agent": AGENT_MODEL, "previous_interaction_id": interaction.id, "environment": interaction.environment_id, "input": results},
+            {"agent": AGENT_MODEL, "previous_interaction_id": interaction.id, "environment": interaction.environment_id, "input": results, "tools": tools},
             "after feedback tools",
             active_listener,
             debug,

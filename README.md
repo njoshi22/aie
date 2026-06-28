@@ -29,8 +29,8 @@ cp .env.example .env
 
 ## Runtime Pieces
 
-- `api.main`: FastAPI service for agents, sessions, memory, policy, CRM writes, and approval gates. It initializes SQLite and seeds policy/CRM/demo data on startup. By default it writes `db/revmem.db`; set `REVMEM_DB` for an isolated database.
-- `agent.runner`: lower-level hosted-agent executor. It creates Gemini/Antigravity interactions, injects static `.agents` guidance plus the service-generated `/agents/{id}/skill.md`, exposes only tools listed in the agent's service `allowed_tools`, executes returned tool calls through `agent.revmem_client`, and logs outcomes back to the API.
+- `api.main`: FastAPI service for agents, sessions, memory, policy, CRM writes, approval gates, and the service-owned MCP endpoint at `/mcp`. It initializes SQLite and seeds policy/CRM/demo data on startup. By default it writes `db/revmem.db`; set `REVMEM_DB` for an isolated database.
+- `agent.runner`: lower-level hosted-agent executor. It creates Gemini/Antigravity interactions, injects static `.agents` guidance plus the service-generated `/agents/{id}/skill.md`, gives live agents the service MCP endpoint, and logs outcomes back to the API. Stub mode can still use local function declarations for offline tests.
 - `agent.demo`: plain three-session wrapper around `agent.runner`.
 - `cli.run`: primary demo entrypoint. Offline scaffold modes do not need Gemini or the API. Live and continuous modes use `agent.runner`, render a Rich terminal transcript, and require `GEMINI_API_KEY` plus a non-stub `REVMEM_BASE_URL`.
 
@@ -50,6 +50,18 @@ uv run uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
 The API seeds policy, CRM, and the demo agent during startup. Do not run `data.seed` as a required boot step.
+
+Live hosted-agent runs use the API's MCP endpoint by default:
+
+```bash
+# default for non-stub API runs
+export REVMEM_TOOL_TRANSPORT=mcp
+
+# optional fallback for local function declarations
+export REVMEM_TOOL_TRANSPORT=function
+```
+
+The MCP server receives `x-revmem-agent-id` and `x-revmem-session-id` headers from `agent.runner`. It uses the DB-backed agent role and policy tables to filter tool discovery and authorize tool calls; `agent/` does not decide write access.
 
 If port `8000` is already taken, pick another port and keep `REVMEM_BASE_URL` in sync:
 
@@ -249,7 +261,7 @@ flowchart LR
 │   ├── demo.py                      # Three-session agent demo wrapper
 │   ├── prompts.py                   # Reconciliation and feedback prompt builders
 │   ├── scenarios.py                 # Deal configs and expected outcomes
-│   ├── tools.py                     # Tool definitions exposed to the hosted agent
+│   ├── tools.py                     # Legacy function declarations used in stub/fallback mode
 │   ├── tool_types.py                # Shared tool evidence types
 │   ├── revmem_client.py             # HTTP client for the RevMem API
 │   ├── spike.py                     # Local proof-of-concept spike script
@@ -293,7 +305,7 @@ flowchart LR
 
 ## Key Concepts
 
-- **Reputation tiers**: OBSERVER (0.0-0.3) -> ANALYST (0.3-0.6) -> AUTONOMOUS (0.6-1.0). The DB-backed agent row stores the current tier; the API returns `allowed_tools` and `/agents/{id}/skill.md`, and `agent/` only adapts those service decisions into hosted-agent tool declarations and instructions.
+- **Reputation tiers**: OBSERVER (0.0-0.3) -> ANALYST (0.3-0.6) -> AUTONOMOUS (0.6-1.0). The DB-backed agent row stores the current tier; the API returns `allowed_tools` and `/agents/{id}/skill.md`, and live hosted agents call the service-owned MCP endpoint so policy is enforced in the service layer.
 - **Approval gate**: Service-enforced at the route/method level. Each side-effect method has an explicit approval policy defining whether approval is required, whether approvers are `any` or `all`, and whether one approval depends on another. Service methods either execute, return `approval_required` with an `approval_request_id`, or reject the request. The runner only displays and records service results.
 - **Continual learning**: Human feedback -> agent stores lesson via `store_memory` -> future sessions retrieve via `retrieve_context` -> behavior improves.
 - **Continuous interaction chain**: `--continuous` keeps one `environment_id` and chains via `previous_interaction_id`, so the agent's cognitive state evolves within a single Antigravity session.

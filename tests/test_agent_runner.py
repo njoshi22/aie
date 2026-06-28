@@ -230,6 +230,47 @@ def test_run_session_uses_service_allowed_tools_and_skill_md(monkeypatch) -> Non
     assert "write_crm" not in str(initial_call["input"])
 
 
+def test_interaction_tools_use_mcp_server_for_live_service(monkeypatch) -> None:
+    monkeypatch.setattr("agent.runner.revmem_client.STUB_MODE", False)
+    monkeypatch.setattr("agent.runner.revmem_client.REVMEM_BASE_URL", "http://127.0.0.1:8000")
+
+    tools = runner._interaction_tools(
+        agent_id="agent-1",
+        session_id="session-1",
+        allowed_tool_names=["get_contract", "route_for_approval"],
+    )
+
+    assert tools == [
+        {
+            "mcpServers": [
+                {
+                    "name": "RevMem",
+                    "streamableHttpTransport": {
+                        "url": "http://127.0.0.1:8000/mcp",
+                        "headers": {
+                            "x-revmem-agent-id": "agent-1",
+                            "x-revmem-session-id": "session-1",
+                        },
+                    },
+                }
+            ]
+        }
+    ]
+
+
+def test_interaction_tools_use_function_declarations_in_stub_mode(monkeypatch) -> None:
+    monkeypatch.setattr("agent.runner.revmem_client.STUB_MODE", True)
+    monkeypatch.setattr("agent.runner.revmem_client.REVMEM_BASE_URL", "")
+
+    tools = runner._interaction_tools(
+        agent_id="agent-1",
+        session_id="session-1",
+        allowed_tool_names=["get_contract", "route_for_approval"],
+    )
+
+    assert [tool["name"] for tool in tools] == ["get_contract", "route_for_approval"]
+
+
 def _gold_schedule() -> GoldItem:
     return GoldItem(
         field="annual_schedule_usd",

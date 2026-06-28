@@ -81,6 +81,7 @@ def test_route_for_approval_schema_documents_inputs_and_result_contract() -> Non
 
     assert _object_property(properties, "change_type")["enum"] == [
         "schedule_change",
+        "term_change",
         "rounding",
         "discount_over_authority",
     ]
@@ -110,7 +111,7 @@ def test_write_crm_schema_documents_nested_discrepancy_and_result_contract() -> 
     discrepancy_properties = discrepancy["properties"]
     assert isinstance(discrepancy_properties, dict)
     discrepancy_change_type = _object_property(cast(dict[str, object], discrepancy_properties), "change_type")
-    assert discrepancy_change_type["enum"] == ["schedule_change", "rounding", "discount_over_authority"]
+    assert discrepancy_change_type["enum"] == ["schedule_change", "term_change", "rounding", "discount_over_authority"]
 
     approval_request_id = _object_property(properties, "approval_request_id")
     assert "retry after get_approval_status" in str(approval_request_id["description"])
