@@ -151,20 +151,16 @@ def _service_allowed_tools(agent_state: JsonObject) -> list[str]:
 def _interaction_tools(agent_id: str, session_id: str, allowed_tool_names: list[str]) -> list[JsonObject]:
     transport = os.getenv("REVMEM_TOOL_TRANSPORT", "mcp").strip().lower()
     if transport != "function" and not revmem_client.STUB_MODE and revmem_client.REVMEM_BASE_URL:
+        # Interactions API MCP tool shape: {type:"mcp_server", name, url, headers}
         return [
             {
-                "mcpServers": [
-                    {
-                        "name": "RevMem",
-                        "streamableHttpTransport": {
-                            "url": f"{revmem_client.REVMEM_BASE_URL}/mcp",
-                            "headers": {
-                                MCP_AGENT_ID_HEADER: agent_id,
-                                MCP_SESSION_ID_HEADER: session_id,
-                            },
-                        },
-                    }
-                ]
+                "type": "mcp_server",
+                "name": "revmem",
+                "url": f"{revmem_client.REVMEM_BASE_URL}/mcp/",
+                "headers": {
+                    MCP_AGENT_ID_HEADER: agent_id,
+                    MCP_SESSION_ID_HEADER: session_id,
+                },
             }
         ]
     return get_tools_for_allowed_names(allowed_tool_names)
