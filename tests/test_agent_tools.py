@@ -86,7 +86,7 @@ def test_route_for_approval_schema_documents_inputs_and_result_contract() -> Non
     ]
     assert "agent_id" not in properties
     assert "source of truth" in str(_object_property(properties, "deal_id")["description"])
-    assert "absolute dollar impact" in str(_object_property(properties, "amount_usd")["description"])
+    assert "absolute dollar impact" in str(_object_property(properties, "amount_usd")["description"]).lower()
     assert "why approval is needed" in str(_object_property(properties, "summary")["description"])
 
     description = _description(allowed_tools, "route_for_approval")

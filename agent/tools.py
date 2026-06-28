@@ -194,7 +194,7 @@ WRITE_CRM: ToolDefinition = {
             },
             "approval_request_id": {
                 "type": "string",
-                "description": "Only provide when retrying after get_approval_status reports the request is approved.",
+                "description": "Only provide on retry after get_approval_status reports the request is approved.",
             },
         },
         "required": ["deal_id", "fields", "discrepancy"],
