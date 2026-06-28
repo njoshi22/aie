@@ -82,17 +82,22 @@ ngrok http 8000 --domain=<your-reserved>.ngrok.app
 export GEMINI_API_KEY=...
 export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
 
-# Session 3 (default — ANALYST tier, approval gate)
+# Single session (default: session 3, ANALYST tier)
 uv run python -m cli.run --live
-
-# Specific session
 uv run python -m cli.run --live --session 1
+
+# All 3 sessions (1→2→3) with env-ID threading — the full demo narrative
+uv run python -m cli.run --live --all
+
+# Repeat N times to show long-term self-improvement
+# Runs sessions 1→2→3 then cycles session 3, reputation accumulates
+uv run python -m cli.run --live --runs 10
 
 # Skip approval polling
 uv run python -m cli.run --live --no-wait
 ```
 
-This is the recommended demo mode — the agent's tool calls, memory retrieval, and routing decisions render through the same Rich panels as scaffold mode, but the decisions are real.
+`--all` runs the 3-session demo narrative (cold start → learned → generalized) with pauses between sessions. `--runs N` repeats to show improvement over many iterations — at the end, a summary table shows the reputation trajectory across all runs.
 
 ### 4. Run the agent via Python runner (raw output, requires API key)
 

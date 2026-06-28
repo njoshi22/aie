@@ -1,15 +1,16 @@
 """RevMem agent-working CLI - the live terminal transcript (the demo's hero).
 
 Two modes:
-  --live          Real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)
-  --session s1    Scaffold replay with mock data (no API key needed)
+  --live            Real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)
+  --session s1      Scaffold replay with mock data (no API key needed)
 
 Run:
-    uv run python -m cli.run --live                # real agent, Rich UI
-    uv run python -m cli.run --live --session 2    # real agent, specific session
+    uv run python -m cli.run --live                # single session (default: 3)
+    uv run python -m cli.run --live --all          # all 3 sessions, env-ID threaded
+    uv run python -m cli.run --live --runs 10      # repeat 10x, show improvement curve
+    uv run python -m cli.run --live --session 1    # specific session
     uv run python -m cli.run                       # scaffold S3 with live CFO approval
     uv run python -m cli.run --session s1          # scaffold S1 cold start
-    uv run python -m cli.run --no-wait             # skip polling (print link and exit)
 
 For the live approval gate, also run the approval endpoint:
     uv run uvicorn notify.approve:app --port 8000
@@ -315,10 +316,73 @@ def _parse_fields_from_output(text: str) -> list[dict] | None:
     return result if result else None
 
 
-def run_live(session_number: int, wait: bool = True) -> dict:
+def run_live(session_number: int, wait: bool = True, env_id: str | None = None, prev_interaction: str | None = None) -> dict:
     from agent.runner import run_session
     listener = RichListener(wait_for_approvals=wait)
-    return run_session(session_number, listener=listener)
+    return run_session(session_number, env_id=env_id, prev_interaction_id=prev_interaction, listener=listener)
+
+
+def run_live_all(wait: bool = True) -> list[dict]:
+    """Run sessions 1→2→3 with env-ID threading — the full demo narrative."""
+    console.print()
+    console.print(render.divider("RevMem Demo — 3 sessions, continual learning"))
+
+    results = []
+    env_id = None
+    prev_interaction = None
+
+    for session_num in [1, 2, 3]:
+        if session_num > 1:
+            console.print(render.divider(f"Session {session_num}"))
+            console.input("[grey50]Press Enter to continue...[/]")
+
+        result = run_live(session_num, wait=wait, env_id=env_id, prev_interaction=prev_interaction)
+        results.append(result)
+
+        env_id = result.get("environment_id")
+        prev_interaction = result.get("interaction_id")
+
+    console.print()
+    console.print(render.run_summary_table(results))
+    console.print()
+    return results
+
+
+def run_live_repeat(runs: int, wait: bool = True) -> list[dict]:
+    """Run session 3 repeatedly to show long-term self-improvement.
+
+    Each run uses the same deal archetype (Globex) but reputation and
+    memories accumulate in RevMem across runs, so the agent should
+    improve over time.
+    """
+    console.print()
+    console.print(render.divider(f"RevMem Self-Improvement — {runs} runs"))
+
+    results = []
+    env_id = None
+    prev_interaction = None
+
+    for i in range(1, runs + 1):
+        console.print(render.divider(f"Run {i}/{runs}"))
+
+        # Alternate between acme (sessions 1-2) and globex (session 3) to
+        # exercise generalization. After the first 3, cycle session 3.
+        if i <= 3:
+            session_num = i
+        else:
+            session_num = 3
+
+        result = run_live(session_num, wait=wait, env_id=env_id, prev_interaction=prev_interaction)
+        result["run"] = i
+        results.append(result)
+
+        env_id = result.get("environment_id")
+        prev_interaction = result.get("interaction_id")
+
+    console.print()
+    console.print(render.run_summary_table(results))
+    console.print()
+    return results
 
 
 # --- Entry point --------------------------------------------------------------
@@ -326,15 +390,22 @@ def run_live(session_number: int, wait: bool = True) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="RevMem agent-working CLI.")
     parser.add_argument("--live", action="store_true", help="real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)")
+    parser.add_argument("--all", action="store_true", help="run all 3 sessions (1→2→3) with env-ID threading")
+    parser.add_argument("--runs", type=int, default=None, metavar="N", help="repeat N times to show long-term self-improvement")
     parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
     parser.add_argument("--no-wait", action="store_true", help="skip approval polling")
     args = parser.parse_args()
 
     if args.live:
-        session_num = int(args.session) if args.session else 3
-        if session_num not in (1, 2, 3):
-            parser.error("--live sessions: 1, 2, or 3")
-        run_live(session_num, wait=not args.no_wait)
+        if args.runs:
+            run_live_repeat(args.runs, wait=not args.no_wait)
+        elif args.all:
+            run_live_all(wait=not args.no_wait)
+        else:
+            session_num = int(args.session) if args.session else 3
+            if session_num not in (1, 2, 3):
+                parser.error("--live sessions: 1, 2, or 3")
+            run_live(session_num, wait=not args.no_wait)
     else:
         session_name = args.session or "s3"
         if session_name not in SCAFFOLD_SCENARIOS:
