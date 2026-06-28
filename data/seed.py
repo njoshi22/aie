@@ -20,7 +20,10 @@ def load_contract(deal_id: str) -> dict[str, Any] | None:
 
 
 def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent") -> Agent:
+    # Reset mutable demo state so each (re)seed is a true cold start.
     conn.execute("DELETE FROM approvals")
+    conn.execute("DELETE FROM memories")
+    conn.execute("DELETE FROM sessions")
     conn.commit()
     # policy (replace existing so re-seed is idempotent)
     conn.execute("DELETE FROM policy_rules")
@@ -31,12 +34,13 @@ def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent"
     # crm (mutable copy of the stale Salesforce state)
     for deal_id, record in _load("salesforce.json").items():
         database.upsert_crm(conn, deal_id, record)
-    # demo agent (only if none exists)
+    # demo agent: reset to cold start (keep the same id so re-seed is idempotent),
+    # so reputation, tier, and session counts replay from observer/0.1 each time.
     existing = conn.execute("SELECT id FROM agents LIMIT 1").fetchone()
     if existing:
-        agent = database.get_agent(conn, existing["id"])
-        if agent is not None:
-            return agent
+        agent = Agent(id=existing["id"], name=demo_agent_name)
+        database.update_agent(conn, agent)
+        return agent
     agent = Agent(name=demo_agent_name)
     database.insert_agent(conn, agent)
     return agent
