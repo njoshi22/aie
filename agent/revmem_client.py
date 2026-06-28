@@ -249,10 +249,10 @@ def _stub_response(method: str, path: str, body: JsonObject | None = None) -> Js
         return {"deal_id": path.rsplit("/", 1)[-1]}
 
     if path == "/route_for_approval":
-        return {"approval_id": "appr-stub-001", "token": "stub-token",
+        return {"approval_id": "appr-stub-001",
                 "route_to": (body or {}).get("change_type") == "discount_over_authority"
-                and "cfo" or "controller",
-                "status": "pending", "approval_link": "http://localhost:8000/approvals/appr-stub-001?token=stub-token"}
+                and "cfo_cco" or "controller",
+                "status": "pending"}
     if path.startswith("/approvals/") and path.endswith("/status"):
         return {"id": path.split("/")[2], "status": "approved"}  # stub auto-approves
 

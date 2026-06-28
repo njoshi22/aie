@@ -172,6 +172,14 @@ def wait_for_revmem_approval(approval_id: str, timeout: float = 300.0, interval:
     raise TimeoutError(f"approval {approval_id} not decided within {timeout:.0f}s")
 
 
+def approval_link_location_detail() -> str:
+    from agent import revmem_client
+
+    if revmem_client.STUB_MODE:
+        return "Offline stub mode: no clickable approval link is created. Set REVMEM_BASE_URL and run api.main for real approval links."
+    return "Human approval link is printed by the RevMem API server logs."
+
+
 # --- Scaffold mode ------------------------------------------------------------
 
 def run_scaffold(
@@ -239,7 +247,7 @@ def run_scaffold(
     if link:
         console.print(render.approval_request_panel(route, link))
     else:
-        console.print(render.step("Approval requested", "Human approval link is printed by the RevMem API server logs.", status="warn"))
+        console.print(render.step("Approval requested", approval_link_location_detail(), status="warn"))
 
     if not wait:
         detail = f"approval_id={approval_id}" if approval_id else "approval_id unavailable"
@@ -340,7 +348,7 @@ class RichListener:
         if link:
             console.print(render.approval_request_panel(route, link))
         else:
-            console.print(render.step("Approval requested", "Human approval link is printed by the RevMem API server logs.", status="warn"))
+            console.print(render.step("Approval requested", approval_link_location_detail(), status="warn"))
         if self._wait:
             approval_id = str(approval.get("approval_id", ""))
             if approval_id:

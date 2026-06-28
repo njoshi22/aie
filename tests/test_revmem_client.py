@@ -111,3 +111,17 @@ def test_client_route_status_write_shapes(monkeypatch: pytest.MonkeyPatch) -> No
             },
         ),
     ]
+
+
+def test_stub_route_for_approval_does_not_return_clickable_secret_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _reload_client(monkeypatch, None)
+
+    routed = client.route_for_approval("globex", 40000, "schedule_change")
+
+    assert routed == {
+        "approval_id": "appr-stub-001",
+        "route_to": "controller",
+        "status": "pending",
+    }
