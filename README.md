@@ -66,7 +66,7 @@ uv run python -m cli.run --no-wait
 
 Open the approval link printed in the terminal to approve/reject as the CFO.
 
-### 3. Run the agent against Antigravity (requires API key)
+### 3. Run the agent via Python runner (requires API key)
 
 ```bash
 export GEMINI_API_KEY=...
@@ -92,9 +92,41 @@ export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
 uv run python -m agent.demo
 ```
 
+### 4. Run the agent via Antigravity CLI (interactive demo)
+
+The Antigravity CLI can drive the same managed agent interactively. It reads the agent persona and skills from `.agents/` on disk, and the agent calls RevMem tools via the ngrok-exposed API — same tool call flow as the Python runner.
+
+**Terminal 1** — start RevMem API + ngrok:
+```bash
+uv run uvicorn notify.approve:app --port 8000
+# In another terminal:
+ngrok http 8000 --domain=<your-reserved>.ngrok.app
+```
+
+**Terminal 2** — launch Antigravity CLI:
+```bash
+export GEMINI_API_KEY=...
+export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+
+# Start an interactive session with the managed agent
+antigravity
+
+# The CLI reads .agents/AGENTS.md for the agent persona and
+# .agents/skills/reconciliation/SKILL.md for available actions.
+# Paste a reconciliation prompt and the agent will call RevMem tools
+# (retrieve_context, route_for_approval, etc.) autonomously.
+```
+
+**When to use which:**
+- **Python runner** (`agent.demo`): reproducible 3-session demo with auto-grading, best for recording or consistent demos
+- **Antigravity CLI**: interactive, visually impressive, great for live stage demos where you want to poke at the agent in real time
+
 ## Project Structure
 
 ```
+├── .agents/            # Antigravity CLI agent config (source of truth)
+│   ├── AGENTS.md       # Agent persona — read by CLI and Python runner
+│   └── skills/reconciliation/SKILL.md  # Base skill definitions
 ├── agent/              # Antigravity integration
 │   ├── runner.py       # Interactions API calls, env-ID threading
 │   ├── demo.py         # Run all 3 sessions sequentially
@@ -102,7 +134,7 @@ uv run python -m agent.demo
 │   ├── tools.py        # Tool definitions (tier-gated)
 │   ├── prompts.py      # System prompts for reconciliation
 │   ├── revmem_client.py # HTTP client for RevMem API
-│   ├── templates/      # AGENTS.md + SKILL.md generators
+│   ├── templates/      # Reads .agents/ files, generates tier-scoped SKILL.md
 │   └── data/           # Mock contracts, CRM records, policy
 ├── cli/                # Rich terminal agent view (the demo's hero)
 │   ├── run.py          # Live transcript driver
