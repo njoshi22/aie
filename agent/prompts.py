@@ -35,9 +35,9 @@ def build_reconciliation_prompt(
         "3. For each field, state whether it matches or not.\n"
         "4. For mismatches, classify as material or immaterial.\n"
         "5. Route material discrepancies to the correct approver using the returned policy.\n"
-        "6. If you receive an approval_id, call get_approval_status with that id.\n"
-        "7. If status is approved and your tier allows writes, call write_crm with the exact "
-        "approved discrepancy and corrected fields. If status is pending or rejected, do not write.\n"
+        "6. If write_crm returns approval_required, poll get_approval_status with approval_request_id.\n"
+        "7. If the request is approved and your tier allows writes, retry write_crm with the exact "
+        "approved discrepancy, corrected fields, and approval_request_id. If pending or rejected, do not retry.\n"
         "8. Output your analysis as the JSON format specified in AGENTS.md.\n"
     )
 

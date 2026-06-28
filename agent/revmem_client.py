@@ -9,9 +9,9 @@ Endpoints (no ``/api`` prefix — see the Person B plan / ARCHITECTURE.md):
     POST /memory                           -> memory
     GET  /contracts/{deal_id}              -> signed order form
     GET  /crm/{deal_id}                    -> CRM record
-    POST /route_for_approval               -> {approval_id, route_to, status, ...}
-    GET  /approvals/{id}/status            -> approval status (poll target)
-    POST /crm/write                        -> {ok, decision, crm}  (or 403)
+    POST /route_for_approval               -> {approval_request_id, approvals, status, ...}
+    GET  /approval-requests/{id}/status    -> approval request status (poll target)
+    POST /crm/write                        -> {ok, decision, crm} or approval_required
 
 Calls use hardcoded stubs only when ``REVMEM_BASE_URL`` is unset or
 ``REVMEM_STUB_MODE=1``. With a base URL configured, transport failures raise
@@ -164,17 +164,17 @@ def route_for_approval(
 ) -> JsonObject:
     """Route a discrepancy for approval.
 
-    The canonical API returns approval_id, route_to, and status. It does not
-    return the human approval token or link to the agent.
+    The canonical API returns approval_request_id, approver task IDs, route_to,
+    and status. It does not return the human approval token or link to the agent.
     """
     body: JsonObject = {"deal_id": deal_id, "amount_usd": amount_usd, "change_type": change_type}
     body.update(extra)
     return _expect_object(_api_call("POST", "/route_for_approval", body), "/route_for_approval")
 
 
-def get_approval_status(approval_id: str) -> JsonObject:
-    """Poll target between route_for_approval and write_crm."""
-    path = f"/approvals/{quote(approval_id)}/status"
+def get_approval_status(approval_request_id: str) -> JsonObject:
+    """Poll an approval request before retrying a gated service method."""
+    path = f"/approval-requests/{quote(approval_request_id)}/status"
     return _expect_object(_api_call("GET", path), path)
 
 
@@ -183,10 +183,13 @@ def write_crm(
     deal_id: str,
     fields: JsonObject,
     discrepancy: JsonObject | None = None,
-    approval_id: str | None = None,
+    approval_request_id: str | None = None,
 ) -> JsonObject:
-    """Reconcile CRM to the signed contract. Server-gated by authorize_write —
-    returns {ok, decision, crm} on ALLOW, otherwise an HTTP 403 (stubbed allow)."""
+    """Reconcile CRM to the signed contract.
+
+    The service method either executes or returns approval_required with an
+    approval_request_id to poll and retry after approval.
+    """
     return _expect_object(
         _api_call(
             "POST",
@@ -196,7 +199,7 @@ def write_crm(
                 "deal_id": deal_id,
                 "fields": fields,
                 "discrepancy": discrepancy or {},
-                "approval_id": approval_id,
+                "approval_request_id": approval_request_id,
             },
         ),
         "/crm/write",
@@ -249,12 +252,48 @@ def _stub_response(method: str, path: str, body: JsonObject | None = None) -> Js
         return {"deal_id": path.rsplit("/", 1)[-1]}
 
     if path == "/route_for_approval":
-        return {"approval_id": "appr-stub-001",
-                "route_to": (body or {}).get("change_type") == "discount_over_authority"
-                and "cfo_cco" or "controller",
-                "status": "pending"}
+        route_to = (body or {}).get("change_type") == "discount_over_authority" and "cfo_cco" or "controller"
+        approvals = (
+            [
+                {
+                    "approval_id": "appr-stub-cfo",
+                    "step_id": "cfo",
+                    "role": "cfo",
+                    "status": "pending",
+                    "depends_on": [],
+                },
+                {
+                    "approval_id": "appr-stub-cco",
+                    "step_id": "cco",
+                    "role": "cco",
+                    "status": "pending",
+                    "depends_on": ["cfo"],
+                },
+            ]
+            if route_to == "cfo_cco"
+            else [
+                {
+                    "approval_id": "appr-stub-001",
+                    "step_id": "controller",
+                    "role": "controller",
+                    "status": "pending",
+                    "depends_on": [],
+                }
+            ]
+        )
+        return {
+            "approval_required": True,
+            "approval_request_id": "req-stub-001",
+            "approval_id": approvals[0]["approval_id"],
+            "route_to": route_to,
+            "status": "pending",
+            "approval_status": "pending",
+            "approvals": approvals,
+        }
+    if path.startswith("/approval-requests/") and path.endswith("/status"):
+        return {"approval_request_id": path.split("/")[2], "status": "approved"}  # stub auto-approves
     if path.startswith("/approvals/") and path.endswith("/status"):
-        return {"id": path.split("/")[2], "status": "approved"}  # stub auto-approves
+        return {"id": path.split("/")[2], "status": "approved"}
 
     if path == "/crm/write":
         print(f"[STUB] write_crm: {json.dumps((body or {}).get('fields', {}))}")

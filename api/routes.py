@@ -7,12 +7,15 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from api import approval_gate
+from api.approval_gate import ensure_method_approved
 from core import context, database, governance, session
-from core.models import Agent, Approval, ApprovalStatus, Memory, MemoryType
+from core import approval_policy
+from core.models import Agent, Approval, ApprovalStatus, Memory, MemoryType, PermissionTier
 from data import seed
 
 router = APIRouter()
@@ -68,11 +71,36 @@ class CrmWrite(BaseModel):
     fields: dict[str, Any]
     discrepancy: dict[str, Any] = {}
     approval_id: str | None = None
+    approval_request_id: str | None = None
 
 
 class PolicyEdit(BaseModel):
     condition: dict[str, Any] | None = None
     route_to: str | None = None
+    approval_request_id: str | None = None
+
+
+def _approval_rows(approvals: list[Approval]) -> list[dict[str, object]]:
+    return [
+        {
+            "step_id": approval.step_id,
+            "status": approval.status,
+            "depends_on": approval.depends_on,
+        }
+        for approval in approvals
+    ]
+
+
+def _blocked_approval_response(
+    gate: approval_gate.ApprovalGateResult,
+    response: Response,
+) -> dict[str, Any]:
+    payload = gate.payload
+    if payload.get("approval_required") and payload.get("approval_status") == ApprovalStatus.PENDING:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return payload
+    reason = str(payload.get("reason", "approval request is not satisfied"))
+    raise HTTPException(status.HTTP_403_FORBIDDEN, reason)
 
 
 @router.post("/agents")
@@ -175,39 +203,63 @@ def retrieve_memory(agent_id: str, query: str, request: Request,
 def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
     conn = _conn(request)
     approver = governance.route(body.model_dump(), database.list_policy(conn))
-    approval = Approval(deal_id=body.deal_id, discrepancy=body.model_dump(),
-                        approver_role=approver)
-    database.insert_approval(conn, approval)
+    gate = ensure_method_approved(
+        conn,
+        "crm.write",
+        {
+            "tier": PermissionTier.ANALYST,
+            "deal_id": body.deal_id,
+            "discrepancy": body.model_dump(),
+        },
+    )
+    payload = dict(gate.payload)
+    payload["route_to"] = approver
+    payload["status"] = payload.get("approval_status", ApprovalStatus.PENDING)
     base = os.getenv("REVMEM_BASE_URL", "")
-    link = f"{base}/approvals/{approval.id}?token={approval.token}"
-    print(f"[approval] route to {approver}: {link}")  # email is stubbed for the demo
-    # Token intentionally NOT returned to the agent — the agent polls /approvals/{id}/status
+    for approval_ref in payload.get("approvals", []):
+        if not isinstance(approval_ref, dict):
+            continue
+        approval = database.get_approval(conn, str(approval_ref.get("approval_id", "")))
+        if approval is None:
+            continue
+        link = f"{base}/approvals/{approval.id}?token={approval.token}"
+        print(f"[approval] route to {approval.approver_role}: {link}")  # email is stubbed for the demo
+    # Token intentionally NOT returned to the agent — the agent polls /approval-requests/{id}/status
     # (token-less); the human approver receives the link+token via the stubbed email (stdout).
-    return {"approval_id": approval.id, "route_to": approver, "status": approval.status}
+    return payload
 
 
 @router.post("/crm/write")
-def write_crm(body: CrmWrite, request: Request) -> dict[str, Any]:
+def write_crm(body: CrmWrite, request: Request, response: Response) -> dict[str, Any]:
     conn = _conn(request)
     agent = database.get_agent(conn, body.agent_id)
     if not agent:
         raise HTTPException(404, "unknown agent")
-    approval_status = None
-    if body.approval_id:
-        appr = database.get_approval(conn, body.approval_id)
-        # Bind approval to this specific write: foreign/mismatched approvals must not authorize it.
-        if appr and appr.deal_id == body.deal_id and appr.discrepancy == body.discrepancy:
-            approval_status = appr.status
-        else:
-            approval_status = None
-    decision = governance.authorize_write(agent.permission_tier, body.discrepancy,
-                                          approval_status)
-    if decision != governance.WriteDecision.ALLOW:
-        raise HTTPException(403, f"write not allowed ({decision}) — route_for_approval first")
+    if not governance.can_use(agent.permission_tier, "write_crm"):
+        raise HTTPException(403, f"tier {agent.permission_tier} cannot write_crm")
+
+    approval_request_id = body.approval_request_id
+    if approval_request_id is None and body.approval_id:
+        approval = database.get_approval(conn, body.approval_id)
+        approval_request_id = approval.request_id if approval else None
+
+    gate = ensure_method_approved(
+        conn,
+        "crm.write",
+        {
+            "tier": agent.permission_tier,
+            "deal_id": body.deal_id,
+            "discrepancy": body.discrepancy,
+        },
+        approval_request_id,
+    )
+    if not gate.allowed:
+        return _blocked_approval_response(gate, response)
+
     record = database.get_crm(conn, body.deal_id) or {}
     record.update(body.fields)
     database.upsert_crm(conn, body.deal_id, record)
-    return {"ok": True, "decision": decision, "crm": record}
+    return {**gate.payload, "crm": record}
 
 
 _APPROVAL_HTML = """<!doctype html><html><head><title>RevMem Approval</title></head>
@@ -249,6 +301,12 @@ def approval_decision(approval_id: str, request: Request,
         raise HTTPException(404, "unknown approval")
     if a.status != ApprovalStatus.PENDING:
         return a.model_dump(mode="json")
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(400, "decision must be approve or reject")
+    if decision == "approve":
+        approvals = database.list_approvals_for_request(conn, a.request_id)
+        if not approval_policy.dependencies_satisfied(a.step_id, _approval_rows(approvals)):
+            raise HTTPException(409, f"approval {a.step_id} has unsatisfied dependencies")
     a.status = ApprovalStatus.APPROVED if decision == "approve" else ApprovalStatus.REJECTED
     a.decided_at = datetime.now(timezone.utc)
     database.update_approval(conn, a)
@@ -257,13 +315,23 @@ def approval_decision(approval_id: str, request: Request,
 
 @router.get("/approvals/{approval_id}/status")
 def approval_status(approval_id: str, request: Request) -> dict[str, Any]:
-    # JSON status — the AGENT polls this between route_for_approval and write_crm.
+    # JSON status for one human approval task.
     # This endpoint is NOT token-gated, so it must NOT leak the approval token
     # (which would let an id-holder self-approve via the decision endpoint).
     a = database.get_approval(_conn(request), approval_id)
     if not a:
         raise HTTPException(404, "unknown approval")
     return a.model_dump(mode="json", exclude={"token"})
+
+
+@router.get("/approval-requests/{request_id}/status")
+def approval_request_status(request_id: str, request: Request) -> dict[str, Any]:
+    approvals = database.list_approvals_for_request(_conn(request), request_id)
+    if not approvals:
+        raise HTTPException(404, "unknown approval request")
+    payload = approval_gate.approval_request_payload(approvals, "")
+    payload["status"] = payload["approval_status"]
+    return payload
 
 
 @router.get("/contracts/{deal_id}")
@@ -288,11 +356,24 @@ def get_policy(request: Request) -> list[dict[str, Any]]:
 
 
 @router.put("/policy/{policy_id}")
-def edit_policy(policy_id: str, body: PolicyEdit, request: Request) -> dict[str, Any]:
+def edit_policy(policy_id: str, body: PolicyEdit, request: Request, response: Response) -> dict[str, Any]:
     conn = _conn(request)
     r = database.get_policy(conn, policy_id)
     if not r:
         raise HTTPException(404, "unknown policy rule")
+    requested_change: dict[str, Any] = {
+        "policy_id": policy_id,
+        "condition": body.condition,
+        "route_to": body.route_to,
+    }
+    gate = ensure_method_approved(
+        conn,
+        "policy.update",
+        {"tier": PermissionTier.ANALYST, "discrepancy": requested_change},
+        body.approval_request_id,
+    )
+    if not gate.allowed:
+        return _blocked_approval_response(gate, response)
     if body.condition is not None:
         r.condition = body.condition
     if body.route_to is not None:

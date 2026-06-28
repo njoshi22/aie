@@ -108,13 +108,13 @@ ROUTE_FOR_APPROVAL: ToolDefinition = {
 GET_APPROVAL_STATUS: ToolDefinition = {
     "type": "function",
     "name": "get_approval_status",
-    "description": "Poll an approval request by approval_id. Does not return approval tokens.",
+    "description": "Poll an approval request by approval_request_id. Does not return approval tokens.",
     "parameters": {
         "type": "object",
         "properties": {
-            "approval_id": {"type": "string"},
+            "approval_request_id": {"type": "string"},
         },
-        "required": ["approval_id"],
+        "required": ["approval_request_id"],
     },
 }
 
@@ -122,9 +122,8 @@ WRITE_CRM: ToolDefinition = {
     "type": "function",
     "name": "write_crm",
     "description": (
-        "Write CRM corrections after server authorization. Requires ANALYST or "
-        "AUTONOMOUS tier and either an approved approval_id or a server-allowed "
-        "autonomous correction."
+        "Write CRM corrections through the service method gate. The service either "
+        "executes or returns approval_required with approval_request_id."
     ),
     "parameters": {
         "type": "object",
@@ -132,7 +131,7 @@ WRITE_CRM: ToolDefinition = {
             "deal_id": {"type": "string"},
             "fields": {"type": "object"},
             "discrepancy": {"type": "object"},
-            "approval_id": {"type": "string"},
+            "approval_request_id": {"type": "string"},
         },
         "required": ["deal_id", "fields", "discrepancy"],
     },

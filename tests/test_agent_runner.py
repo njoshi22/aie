@@ -15,14 +15,14 @@ def test_tool_call_record_shape() -> None:
     record: ToolCallRecord = {
         "name": "route_for_approval",
         "arguments": {"deal_id": "globex", "change_type": "schedule_change"},
-        "result": {"approval_id": "appr-1", "route_to": "controller"},
-        "source": "pre_tool_hook",
+        "result": {"approval_request_id": "req-1", "route_to": "controller"},
+        "source": "model",
     }
 
     assert record["name"] == "route_for_approval"
     assert record["arguments"]["deal_id"] == "globex"
     assert record["result"]["route_to"] == "controller"
-    assert record["source"] == "pre_tool_hook"
+    assert record["source"] == "model"
 
 
 class _FakeInteractions:
@@ -145,7 +145,7 @@ def test_material_decision_without_route_tool_is_downgraded() -> None:
     )
 
     assert audited == [Decision("annual_schedule_usd", "miss")]
-    assert notes == ["annual_schedule_usd: missing route_for_approval tool call"]
+    assert notes == ["annual_schedule_usd: missing approval request"]
 
 
 def test_material_decision_with_route_tool_uses_tool_route() -> None:
@@ -175,32 +175,44 @@ def test_material_decision_with_route_tool_uses_tool_route() -> None:
     assert notes == []
 
 
-def test_material_decision_with_hook_routed_approval_is_credited_with_note() -> None:
+def test_material_decision_with_service_approval_request_is_credited() -> None:
     audited, notes = runner.audit_decisions_for_tool_evidence(
         deal="globex",
         decisions=[Decision("annual_schedule_usd", "escalate", route_to="controller")],
         gold=[_gold_schedule()],
         tool_calls=[
             {
-                "name": "route_for_approval",
+                "name": "write_crm",
                 "arguments": {
                     "deal_id": "globex",
-                    "amount_usd": 40000.0,
-                    "change_type": "schedule_change",
-                    "summary": "write_crm requested for globex schedule_change 40000.00",
+                    "fields": {"annual_schedule_usd": [80000, 120000, 160000]},
+                    "discrepancy": {
+                        "deal_id": "globex",
+                        "amount_usd": 40000.0,
+                        "change_type": "schedule_change",
+                    },
                 },
                 "result": {
-                    "approval_id": "appr-1",
-                    "route_to": "controller",
-                    "status": "pending",
+                    "approval_required": True,
+                    "approval_request_id": "req-1",
+                    "approval_status": "pending",
+                    "approvals": [
+                        {
+                            "approval_id": "appr-1",
+                            "step_id": "controller",
+                            "role": "controller",
+                            "status": "pending",
+                            "depends_on": [],
+                        }
+                    ],
                 },
-                "source": "pre_tool_hook",
+                "source": "model",
             }
         ],
     )
 
     assert audited == [Decision("annual_schedule_usd", "escalate", route_to="controller")]
-    assert notes == ["annual_schedule_usd: approval routed by pre-tool-use hook"]
+    assert notes == []
 
 
 def test_missing_route_tool_makes_scorecard_fail_material_recall() -> None:
@@ -215,7 +227,7 @@ def test_missing_route_tool_makes_scorecard_fail_material_recall() -> None:
 
     assert scorecard.outcome["accuracy"] == 0.0
     assert scorecard.outcome["material_caught"] == 0
-    assert "missing route_for_approval" in scorecard.notes[-1]
+    assert "missing approval request" in scorecard.notes[-1]
 
 
 def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch) -> None:
@@ -322,13 +334,13 @@ def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch
     assert completed[0]["accuracy"] == 0.333
     assert completed[0]["material_caught"] == 0
     assert result["audit_notes"] == [
-        "annual_schedule_usd: missing route_for_approval tool call",
-        "discount_pct: missing route_for_approval tool call",
+        "annual_schedule_usd: missing approval request",
+        "discount_pct: missing approval request",
     ]
     assert route_calls == []
 
 
-def test_run_session_routes_approval_in_pre_tool_hook(monkeypatch) -> None:
+def test_run_session_records_service_method_approval_request(monkeypatch) -> None:
     from core.models import PermissionTier
 
     class FakeStep:
@@ -406,21 +418,27 @@ def test_run_session_routes_approval_in_pre_tool_hook(monkeypatch) -> None:
             self.interactions = FakeInteractions()
 
     fake_client = FakeClient()
-    route_calls: list[tuple[str, float, str]] = []
     write_calls: list[str] = []
-
-    def fake_route_for_approval(
-        deal_id: str,
-        amount_usd: float,
-        change_type: str,
-        **extra: object,
-    ) -> dict[str, object]:
-        route_calls.append((deal_id, amount_usd, change_type))
-        return {"approval_id": "appr-1", "route_to": "controller", "status": "pending"}
 
     def fake_write_crm(**kwargs: object) -> dict[str, object]:
         write_calls.append(str(kwargs.get("deal_id", "")))
-        return {"ok": True}
+        return {
+            "ok": False,
+            "decision": "needs_approval",
+            "approval_required": True,
+            "approval_request_id": "req-1",
+            "approval_join": "all",
+            "approval_status": "pending",
+            "approvals": [
+                {
+                    "approval_id": "appr-1",
+                    "step_id": "controller",
+                    "role": "controller",
+                    "status": "pending",
+                    "depends_on": [],
+                }
+            ],
+        }
 
     completed: list[dict[str, object]] = []
 
@@ -436,18 +454,16 @@ def test_run_session_routes_approval_in_pre_tool_hook(monkeypatch) -> None:
     )
     monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
     monkeypatch.setattr("agent.runner.revmem_client.retrieve_context", lambda agent_id, query: {"memories": [], "policy": []})
-    monkeypatch.setattr("agent.runner.revmem_client.route_for_approval", fake_route_for_approval)
     monkeypatch.setattr("agent.runner.revmem_client.write_crm", fake_write_crm)
     monkeypatch.setattr("agent.runner.revmem_client.complete_session", lambda session_id, outcome: completed.append(outcome) or {})
 
     result = runner.run_session(3)
 
-    assert route_calls == [("globex", 40000.0, "schedule_change")]
-    assert write_calls == []
-    assert result["tool_calls"][0]["name"] == "route_for_approval"
-    assert result["tool_calls"][0]["source"] == "pre_tool_hook"
-    assert result["tool_calls"][1]["name"] == "write_crm"
-    assert result["tool_calls"][1]["result"]["approval_required"] is True
+    assert write_calls == ["globex"]
+    assert result["tool_calls"][0]["name"] == "write_crm"
+    assert result["tool_calls"][0]["source"] == "model"
+    assert result["tool_calls"][0]["result"]["approval_required"] is True
+    assert result["approvals_routed"][0]["approval_request_id"] == "req-1"
     assert fake_client.interactions.function_results[0][0]["result"]["approval_required"] is True
 
 
@@ -476,9 +492,9 @@ def test_write_crm_tool_executes_client_call(monkeypatch) -> None:
         deal_id: str,
         fields: dict[str, object],
         discrepancy: dict[str, object] | None = None,
-        approval_id: str | None = None,
+        approval_request_id: str | None = None,
     ) -> dict[str, object]:
-        calls.append((agent_id, deal_id, fields, discrepancy, approval_id))
+        calls.append((agent_id, deal_id, fields, discrepancy, approval_request_id))
         return {"ok": True, "decision": "allow", "crm": fields}
 
     monkeypatch.setattr("agent.revmem_client.write_crm", fake_write_crm)
@@ -489,7 +505,7 @@ def test_write_crm_tool_executes_client_call(monkeypatch) -> None:
             "deal_id": "globex",
             "fields": {"annual_schedule_usd": [80000, 120000, 160000]},
             "discrepancy": {"deal_id": "globex", "amount_usd": 40000, "change_type": "schedule_change"},
-            "approval_id": "appr-1",
+            "approval_request_id": "req-1",
         },
         "agent-1",
         "session-1",
@@ -501,11 +517,11 @@ def test_write_crm_tool_executes_client_call(monkeypatch) -> None:
 
 
 def test_get_approval_status_tool_executes_client_call(monkeypatch) -> None:
-    def fake_get_approval_status(approval_id: str) -> dict[str, str]:
-        return {"id": approval_id, "status": "approved"}
+    def fake_get_approval_status(approval_request_id: str) -> dict[str, str]:
+        return {"approval_request_id": approval_request_id, "status": "approved"}
 
     monkeypatch.setattr("agent.revmem_client.get_approval_status", fake_get_approval_status)
 
-    result = runner._execute_tool("get_approval_status", {"approval_id": "appr-1"}, "agent-1", "session-1")
+    result = runner._execute_tool("get_approval_status", {"approval_request_id": "req-1"}, "agent-1", "session-1")
 
-    assert result == {"id": "appr-1", "status": "approved"}
+    assert result == {"approval_request_id": "req-1", "status": "approved"}

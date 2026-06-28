@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS crm_records (
   deal_id TEXT PRIMARY KEY, data TEXT
 );
 CREATE TABLE IF NOT EXISTS approvals (
-  id TEXT PRIMARY KEY, deal_id TEXT, discrepancy TEXT, approver_role TEXT,
+  id TEXT PRIMARY KEY, request_id TEXT NOT NULL, method TEXT NOT NULL,
+  join_mode TEXT NOT NULL, step_id TEXT NOT NULL, depends_on TEXT NOT NULL,
+  deal_id TEXT, discrepancy TEXT, approver_role TEXT,
   status TEXT, token TEXT, created_at TEXT, decided_at TEXT
 );
 """
@@ -51,6 +53,7 @@ def get_connection(path: Path | str = DB_PATH) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_policy_action_column(conn)
+    _ensure_approval_graph_columns(conn)
     conn.commit()
 
 
@@ -58,6 +61,21 @@ def _ensure_policy_action_column(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(policy_rules)").fetchall()}
     if "action" not in cols:
         conn.execute("ALTER TABLE policy_rules ADD COLUMN action TEXT DEFAULT 'escalate'")
+
+
+def _ensure_approval_graph_columns(conn: sqlite3.Connection) -> None:
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(approvals)").fetchall()}
+    migrations = {
+        "request_id": "ALTER TABLE approvals ADD COLUMN request_id TEXT NOT NULL DEFAULT ''",
+        "method": "ALTER TABLE approvals ADD COLUMN method TEXT NOT NULL DEFAULT 'approval.route'",
+        "join_mode": "ALTER TABLE approvals ADD COLUMN join_mode TEXT NOT NULL DEFAULT 'all'",
+        "step_id": "ALTER TABLE approvals ADD COLUMN step_id TEXT NOT NULL DEFAULT ''",
+        "depends_on": "ALTER TABLE approvals ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'",
+    }
+    for column, statement in migrations.items():
+        if column not in cols:
+            conn.execute(statement)
+    conn.execute("UPDATE approvals SET request_id=id WHERE request_id=''")
 
 
 def _dt(value: str | None) -> datetime | None:
@@ -237,23 +255,41 @@ def get_crm(conn: sqlite3.Connection, deal_id: str) -> dict[str, Any] | None:
 # --- approvals ---
 def insert_approval(conn: sqlite3.Connection, a: Approval) -> None:
     conn.execute(
-        "INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?)",
-        (a.id, a.deal_id, json.dumps(a.discrepancy), a.approver_role, a.status,
+        "INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (a.id, a.request_id, a.method, a.join, a.step_id, json.dumps(a.depends_on),
+         a.deal_id, json.dumps(a.discrepancy), a.approver_role, a.status,
          a.token, a.created_at.isoformat(),
          a.decided_at.isoformat() if a.decided_at else None),
     )
     conn.commit()
 
 
-def get_approval(conn: sqlite3.Connection, approval_id: str) -> Approval | None:
-    row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
-    if not row:
-        return None
-    return Approval(id=row["id"], deal_id=row["deal_id"],
-                    discrepancy=json.loads(row["discrepancy"]),
+def insert_approvals(conn: sqlite3.Connection, approvals: list[Approval]) -> None:
+    for approval in approvals:
+        insert_approval(conn, approval)
+
+
+def _approval_from_row(row: sqlite3.Row) -> Approval:
+    return Approval(id=row["id"], request_id=row["request_id"], method=row["method"],
+                    join=row["join_mode"], step_id=row["step_id"],
+                    depends_on=json.loads(row["depends_on"]),
+                    deal_id=row["deal_id"], discrepancy=json.loads(row["discrepancy"]),
                     approver_role=row["approver_role"], status=row["status"],
                     token=row["token"], created_at=datetime.fromisoformat(row["created_at"]),
                     decided_at=_dt(row["decided_at"]))
+
+
+def get_approval(conn: sqlite3.Connection, approval_id: str) -> Approval | None:
+    row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+    return _approval_from_row(row) if row else None
+
+
+def list_approvals_for_request(conn: sqlite3.Connection, request_id: str) -> list[Approval]:
+    rows = conn.execute(
+        "SELECT * FROM approvals WHERE request_id=? ORDER BY created_at, step_id",
+        (request_id,),
+    ).fetchall()
+    return [_approval_from_row(row) for row in rows]
 
 
 def update_approval(conn: sqlite3.Connection, a: Approval) -> None:

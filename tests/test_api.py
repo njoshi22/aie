@@ -2,6 +2,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from core import database
+from core.models import ApprovalStatus, PermissionTier
 
 
 @pytest.fixture()
@@ -12,6 +14,16 @@ def client(tmp_path, monkeypatch):
     app = create_app()
     with TestClient(app) as c:
         yield c
+
+
+def _make_agent(client, tier: str = PermissionTier.ANALYST) -> str:
+    agent_id = client.post("/agents", json={"name": f"A-{tier}"}).json()["id"]
+    conn = client.app.state.conn
+    agent = database.get_agent(conn, agent_id)
+    assert agent is not None
+    agent.permission_tier = tier
+    database.update_agent(conn, agent)
+    return agent_id
 
 
 def test_agent_and_skill(client):
@@ -39,6 +51,107 @@ def test_write_crm_denied_for_observer(client):
                     json={"agent_id": aid, "deal_id": "acme",
                           "fields": {"annual_schedule_usd": [100000, 150000, 200000]}})
     assert r.status_code == 403
+
+
+def test_crm_write_uses_method_approval_request_flow(client):
+    agent_id = _make_agent(client)
+    body = {
+        "agent_id": agent_id,
+        "deal_id": "acme",
+        "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+        "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+    }
+
+    pending = client.post("/crm/write", json=body)
+
+    assert pending.status_code == 202
+    payload = pending.json()
+    assert payload["approval_required"] is True
+    assert payload["approval_join"] == "all"
+    assert payload["approvals"][0]["role"] == "controller"
+    assert "token" not in payload
+    request_id = payload["approval_request_id"]
+    status = client.get(f"/approval-requests/{request_id}/status").json()
+    assert status["approval_status"] == "pending"
+    assert "token" not in status
+
+    approval_id = payload["approvals"][0]["approval_id"]
+    approval = database.get_approval(client.app.state.conn, approval_id)
+    assert approval is not None
+    decided = client.post(
+        f"/approvals/{approval_id}/decision",
+        data={"decision": "approve", "token": approval.token},
+    )
+    assert decided.json()["status"] == ApprovalStatus.APPROVED
+
+    body["approval_request_id"] = request_id
+    written = client.post("/crm/write", json=body)
+    assert written.status_code == 200
+    assert written.json()["approval_request_id"] == request_id
+    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
+
+
+def test_dependent_approval_cannot_be_decided_before_parent(client):
+    agent_id = _make_agent(client)
+    pending = client.post(
+        "/crm/write",
+        json={
+            "agent_id": agent_id,
+            "deal_id": "globex",
+            "fields": {"discount_pct": 30},
+            "discrepancy": {"deal_id": "globex", "amount_usd": 0, "change_type": "discount_over_authority"},
+        },
+    )
+
+    assert pending.status_code == 202
+    approvals = pending.json()["approvals"]
+    assert [approval["role"] for approval in approvals] == ["cfo", "cco"]
+    cfo_id = approvals[0]["approval_id"]
+    cco_id = approvals[1]["approval_id"]
+    cco = database.get_approval(client.app.state.conn, cco_id)
+    cfo = database.get_approval(client.app.state.conn, cfo_id)
+    assert cco is not None
+    assert cfo is not None
+
+    blocked = client.post(
+        f"/approvals/{cco_id}/decision",
+        data={"decision": "approve", "token": cco.token},
+    )
+    assert blocked.status_code == 409
+
+    assert client.post(
+        f"/approvals/{cfo_id}/decision",
+        data={"decision": "approve", "token": cfo.token},
+    ).json()["status"] == ApprovalStatus.APPROVED
+    assert client.post(
+        f"/approvals/{cco_id}/decision",
+        data={"decision": "approve", "token": cco.token},
+    ).json()["status"] == ApprovalStatus.APPROVED
+
+
+def test_policy_update_uses_any_approval_method_policy(client):
+    policy_id = client.get("/policy").json()[0]["id"]
+    pending = client.put(f"/policy/{policy_id}", json={"route_to": "vp_finance"})
+
+    assert pending.status_code == 202
+    payload = pending.json()
+    assert payload["approval_join"] == "any"
+    assert {approval["role"] for approval in payload["approvals"]} == {"finance_admin", "controller"}
+    request_id = payload["approval_request_id"]
+    approval_id = payload["approvals"][0]["approval_id"]
+    approval = database.get_approval(client.app.state.conn, approval_id)
+    assert approval is not None
+    client.post(
+        f"/approvals/{approval_id}/decision",
+        data={"decision": "approve", "token": approval.token},
+    )
+
+    applied = client.put(
+        f"/policy/{policy_id}",
+        json={"route_to": "vp_finance", "approval_request_id": request_id},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["route_to"] == "vp_finance"
 
 
 def test_contracts_and_crm_served(client):

@@ -74,9 +74,14 @@ def test_client_route_status_write_shapes(monkeypatch: pytest.MonkeyPatch) -> No
     def fake_api(method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object]:
         calls.append((method, path, body))
         if path == "/route_for_approval":
-            return {"approval_id": "appr-1", "route_to": "controller", "status": "pending"}
-        if path == "/approvals/appr-1/status":
-            return {"id": "appr-1", "status": "approved"}
+            return {
+                "approval_request_id": "req-1",
+                "approval_id": "appr-1",
+                "route_to": "controller",
+                "status": "pending",
+            }
+        if path == "/approval-requests/req-1/status":
+            return {"approval_request_id": "req-1", "status": "approved"}
         if path == "/crm/write":
             assert body is not None
             return {"ok": True, "decision": "allow", "crm": body["fields"]}
@@ -85,20 +90,20 @@ def test_client_route_status_write_shapes(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(client, "_api_call", fake_api)
 
     routed = client.route_for_approval("acme", 40000, "schedule_change")
-    status = client.get_approval_status(routed["approval_id"])
+    status = client.get_approval_status(routed["approval_request_id"])
     written = client.write_crm(
         "agent-1",
         "acme",
         {"annual_schedule_usd": [100000, 150000, 200000]},
         {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
-        "appr-1",
+        "req-1",
     )
 
     assert status["status"] == "approved"
     assert written["ok"] is True
     assert calls == [
         ("POST", "/route_for_approval", {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}),
-        ("GET", "/approvals/appr-1/status", None),
+        ("GET", "/approval-requests/req-1/status", None),
         (
             "POST",
             "/crm/write",
@@ -107,7 +112,7 @@ def test_client_route_status_write_shapes(monkeypatch: pytest.MonkeyPatch) -> No
                 "deal_id": "acme",
                 "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
                 "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
-                "approval_id": "appr-1",
+                "approval_request_id": "req-1",
             },
         ),
     ]
@@ -120,8 +125,10 @@ def test_stub_route_for_approval_does_not_return_clickable_secret_link(
 
     routed = client.route_for_approval("globex", 40000, "schedule_change")
 
-    assert routed == {
-        "approval_id": "appr-stub-001",
-        "route_to": "controller",
-        "status": "pending",
-    }
+    assert routed["approval_request_id"] == "req-stub-001"
+    assert routed["approval_id"] == "appr-stub-001"
+    assert routed["route_to"] == "controller"
+    assert routed["status"] == "pending"
+    assert routed["approval_required"] is True
+    assert routed["approvals"][0]["role"] == "controller"
+    assert "approval_link" not in routed and "token" not in routed

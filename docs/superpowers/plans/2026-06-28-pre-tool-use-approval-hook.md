@@ -1,5 +1,7 @@
 # Pre-Tool-Use Approval Hook Implementation Plan
 
+> Superseded by `docs/superpowers/plans/2026-06-28-service-layer-approval-contract.md`. The repo is a service layer, so approvals are now route/method policy with OR/AND approver graphs and dependencies, not runner-owned pre-tool hooks.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move approval enforcement for privileged agent actions into a typed pre-tool-use hook, so approval routing happens before `write_crm` executes instead of as post-run runner repair.

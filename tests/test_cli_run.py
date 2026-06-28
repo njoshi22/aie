@@ -35,12 +35,12 @@ def test_live_runtime_allows_explicit_stub_override() -> None:
     ) is None
 
 
-def test_approval_source_label_for_hook() -> None:
-    assert approval_source_label("pre_tool_hook") == "pre-tool-use hook"
-
-
 def test_approval_source_label_for_model() -> None:
     assert approval_source_label("model") == "model tool call"
+
+
+def test_approval_source_label_for_unknown() -> None:
+    assert approval_source_label("") == "unknown source"
 
 
 def test_main_live_all_uses_fresh_agent_by_default(monkeypatch) -> None:

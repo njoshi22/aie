@@ -185,16 +185,16 @@ def tier_for(score: float) -> str:
     return "observer" if score < 0.3 else "analyst" if score < 0.6 else "autonomous"
 
 
-def wait_for_revmem_approval(approval_id: str, timeout: float = 300.0, interval: float = 2.0) -> JsonObject:
+def wait_for_revmem_approval(approval_request_id: str, timeout: float = 300.0, interval: float = 2.0) -> JsonObject:
     from agent import revmem_client
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        status = revmem_client.get_approval_status(approval_id)
+        status = revmem_client.get_approval_status(approval_request_id)
         if status.get("status") != "pending":
             return status
         time.sleep(interval)
-    raise TimeoutError(f"approval {approval_id} not decided within {timeout:.0f}s")
+    raise TimeoutError(f"approval request {approval_request_id} not decided within {timeout:.0f}s")
 
 
 def approval_link_location_detail() -> str:
@@ -206,8 +206,6 @@ def approval_link_location_detail() -> str:
 
 
 def approval_source_label(source: str) -> str:
-    if source == "pre_tool_hook":
-        return "pre-tool-use hook"
     if source == "model":
         return "model tool call"
     return "unknown source"
@@ -276,7 +274,7 @@ def run_scaffold(
         summary=sc["discrepancy"],
         recommended_fix=sc["recommended_fix"],
     )
-    approval_id = str(approval.get("approval_id", ""))
+    approval_request_id = str(approval.get("approval_request_id", ""))
     link = str(approval.get("approval_link", ""))
     route = str(approval.get("route_to", sc["approver_email"]))
     if link:
@@ -285,18 +283,18 @@ def run_scaffold(
         console.print(render.step("Approval requested", approval_link_location_detail(), status="warn"))
 
     if not wait:
-        detail = f"approval_id={approval_id}" if approval_id else "approval_id unavailable"
+        detail = f"approval_request_id={approval_request_id}" if approval_request_id else "approval_request_id unavailable"
         console.print(f"\n[grey70]--no-wait: {detail}. This run will not resume.[/]\n")
         return
 
-    if not approval_id:
-        console.print("\n[red]Approval request did not return an approval_id - leaving CRM unchanged.[/]\n")
+    if not approval_request_id:
+        console.print("\n[red]Approval request did not return an approval_request_id - leaving CRM unchanged.[/]\n")
         return
 
     try:
         with console.status(f"[yellow]waiting for {approver_label} approval...[/]", spinner="dots"):
             decided = wait_for_revmem_approval(
-                approval_id,
+                approval_request_id,
                 timeout=_resolve_approval_timeout(approval_timeout),
                 interval=_resolve_approval_interval(approval_interval),
             )
@@ -393,12 +391,12 @@ class RichListener:
                 )
             )
         if self._wait:
-            approval_id = str(approval.get("approval_id", ""))
-            if approval_id:
+            approval_request_id = str(approval.get("approval_request_id", ""))
+            if approval_request_id:
                 try:
                     with console.status("[yellow]waiting for approval...[/]", spinner="dots"):
                         decided = wait_for_revmem_approval(
-                            approval_id,
+                            approval_request_id,
                             timeout=_resolve_approval_timeout(self._approval_timeout),
                             interval=_resolve_approval_interval(self._approval_interval),
                         )

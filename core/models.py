@@ -83,6 +83,11 @@ class ApprovalStatus:
 
 class Approval(BaseModel):
     id: str = Field(default_factory=_uuid)
+    request_id: str = Field(default_factory=_uuid)
+    method: str = "approval.route"
+    join: str = "all"
+    step_id: str = ""
+    depends_on: list[str] = Field(default_factory=list)
     deal_id: str
     discrepancy: dict[str, Any]
     approver_role: str
