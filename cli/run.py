@@ -1,13 +1,16 @@
 """RevMem agent-working CLI - the live terminal transcript (the demo's hero).
 
-Scaffold: replays a reconciliation session and drives the single CFO email
-approval gate. The mock data and the simulated agent loop are placeholders for
-Person A's Antigravity agent and Person B's RevMem API (see TODOs).
+Two modes:
+  --live            Real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)
+  --session s1      Scaffold replay with mock data (no API key needed)
 
 Run:
-    uv run python -m cli.run                  # S3 with live CFO approval (default)
-    uv run python -m cli.run --session s1     # S1 cold start (no approval)
-    uv run python -m cli.run --no-wait        # skip polling (print link and exit)
+    uv run python -m cli.run --live                # single session (default: 3)
+    uv run python -m cli.run --live --all          # all 3 sessions, env-ID threaded
+    uv run python -m cli.run --live --runs 10      # repeat 10x, show improvement curve
+    uv run python -m cli.run --live --session 1    # specific session
+    uv run python -m cli.run                       # scaffold S3 with live CFO approval
+    uv run python -m cli.run --session s1          # scaffold S1 cold start
 
 For the live approval gate, also run the approval endpoint:
     uv run uvicorn notify.approve:app --port 8000
@@ -16,6 +19,7 @@ For the live approval gate, also run the approval endpoint:
 from __future__ import annotations
 
 import argparse
+import json
 import time
 
 from rich.console import Console
@@ -26,9 +30,7 @@ from notify.approve import create_approval, wait_for_approval
 
 console = Console()
 
-# --- Mock scenario data -------------------------------------------------------
-# TODO(integration): fetch via RevMem tools get_contract/get_crm_record and the
-# Context Engine instead of these literals. Mirrors ARCHITECTURE.md hero mismatch.
+# --- Mock scenario data (scaffold mode) --------------------------------------
 
 ACME_FIELDS = [
     {"field": "Seats", "contract": "1,000", "crm": "1,000", "verdict": "match"},
@@ -38,7 +40,7 @@ ACME_FIELDS = [
     {"field": "Y1 monthly invoice", "contract": "$8,333.33", "crm": "$8,333.00", "verdict": "immaterial"},
 ]
 
-SCENARIOS = {
+SCAFFOLD_SCENARIOS = {
     "s1": {
         "session_name": "Session 1 - cold start",
         "deal_id": "ACME-2026",
@@ -47,7 +49,7 @@ SCENARIOS = {
         "rep_before": 0.10,
         "rep_after": 0.20,
         "tier": "observer",
-        "memory": None,  # genuinely nothing learned yet
+        "memory": None,
         "needs_approval": False,
         "outcome": {"material_caught": "0/1", "false_escalations": 1, "accuracy": 0.0},
     },
@@ -55,7 +57,6 @@ SCENARIOS = {
         "session_name": "Session 3 - live (ANALYST)",
         "deal_id": "GLOBEX-2026",
         "task": "Reconcile signed contract against Salesforce; route discrepancies.",
-        # Globex: same ramp archetype, different numbers (lesson generalizes).
         "fields": [
             {"field": "Seats", "contract": "800", "crm": "800", "verdict": "match"},
             {"field": "TCV", "contract": "$360,000", "crm": "$360,000", "verdict": "match"},
@@ -71,24 +72,24 @@ SCENARIOS = {
         "discrepancy": "Year-1 revenue understated: CRM flat $120k vs ramped $80k schedule.",
         "recommended_fix": "Set CRM annual schedule to $80k / $120k / $160k (match signed contract).",
         "amount_usd": 40000.0,
-        "approver_email": "cfo@example.com",  # TODO: from policy / env
+        "approver_email": "cfo@example.com",
         "outcome": {"material_caught": "1/1", "false_escalations": 0, "accuracy": 1.0},
     },
 }
 
 
 def _beat(seconds: float = 0.6) -> None:
-    """Small pause so the transcript reads as a live agent working."""
     time.sleep(seconds)
 
 
 def tier_for(score: float) -> str:
-    """Permission tier from reputation (ARCHITECTURE.md thresholds)."""
     return "observer" if score < 0.3 else "analyst" if score < 0.6 else "autonomous"
 
 
-def run_session(name: str, wait: bool = True) -> None:
-    sc = SCENARIOS[name]
+# --- Scaffold mode ------------------------------------------------------------
+
+def run_scaffold(name: str, wait: bool = True) -> None:
+    sc = SCAFFOLD_SCENARIOS[name]
     console.print()
     console.print(render.session_header(sc["session_name"], "RevOps Finance Agent", sc["task"]))
     console.print(render.reputation_bar(sc["rep_before"], tier_for(sc["rep_before"])))
@@ -107,7 +108,6 @@ def run_session(name: str, wait: bool = True) -> None:
     console.print(render.diff_table(sc["fields"]))
     console.print()
 
-    # Reconcile each non-matching field according to tier behavior.
     for f in sc["fields"]:
         if f["verdict"] == "immaterial":
             if sc["tier"] == "observer":
@@ -129,7 +129,6 @@ def run_session(name: str, wait: bool = True) -> None:
         console.print("\n[grey70]Reviewer correction on this outcome creates the one experiential memory.[/]\n")
         return
 
-    # --- Human-in-the-loop: single CFO email approval -------------------------
     console.print()
     console.print(render.routing_panel(sc["discrepancy"], sc["approver_email"], sc["recommended_fix"]))
 
@@ -170,12 +169,248 @@ def run_session(name: str, wait: bool = True) -> None:
         console.print(render.step("CFO rejected", "CRM left unchanged", status="warn"))
 
 
+# --- Live mode (real Antigravity agent + Rich rendering) ----------------------
+
+class RichListener:
+    """Renders real agent events through the Rich CLI panels."""
+
+    def __init__(self, wait_for_approvals: bool = True):
+        self._wait = wait_for_approvals
+        self._deal_id: str = ""
+        self._tier: str = ""
+
+    def on_session_start(self, session_number, deal, tier, reputation, task):
+        self._deal_id = deal
+        self._tier = tier
+        console.print()
+        console.print(render.session_header(
+            f"Session {session_number} - LIVE",
+            "RevOps Finance Agent",
+            task,
+        ))
+        console.print(render.reputation_bar(reputation, tier_for(reputation)))
+        console.print()
+
+    def on_tool_call(self, name, arguments):
+        args_short = ", ".join(f"{k}={json.dumps(v)}" for k, v in list(arguments.items())[:3])
+        console.print(render.step(f"{name}({args_short})", status="run"))
+
+    def on_tool_result(self, name, result):
+        if "error" in result:
+            console.print(render.step(f"  {name} error", str(result["error"]), status="err"))
+
+    def on_memory_retrieved(self, memories):
+        if memories:
+            for m in memories:
+                content = m.get("content", "")[:100]
+                console.print(render.step("  memory recalled", content, status="ok"))
+        else:
+            console.print(render.step("  retrieve_context", "no prior memories - cold start", status="warn"))
+
+    def on_agent_response(self, text):
+        console.print()
+        console.print(render.step("Agent analysis complete", status="ok"))
+        # Try to extract and render the diff table from agent JSON output
+        fields = _parse_fields_from_output(text)
+        if fields:
+            console.print()
+            console.print(render.diff_table(fields))
+        console.print()
+
+    def on_approval_needed(self, approval):
+        link = approval.get("approval_link", "")
+        route = approval.get("route_to", "unknown")
+        console.print()
+        console.print(render.routing_panel(
+            f"Routed for {route.upper()} approval",
+            route,
+            approval.get("summary", ""),
+        ))
+        if link:
+            console.print(render.approval_request_panel(route, link))
+            if self._wait:
+                approval_id = approval.get("approval_id", "")
+                if approval_id:
+                    try:
+                        with console.status("[yellow]waiting for approval...[/]", spinner="dots"):
+                            from notify.approve import store
+                            decided = wait_for_approval(approval_id)
+                        if decided.status == "approved":
+                            console.print(render.step("Approved", status="ok"))
+                        else:
+                            console.print(render.step("Rejected", "CRM left unchanged", status="warn"))
+                    except TimeoutError:
+                        console.print(render.step("Approval timed out", status="err"))
+
+    def on_graded(self, scorecard, graded_from_output):
+        source = "agent output" if graded_from_output else "modeled fallback"
+        console.print(render.outcome_panel(scorecard.outcome))
+        console.print(f"[grey50]graded from: {source}[/]")
+        if scorecard.notes:
+            for note in scorecard.notes:
+                console.print(f"  [grey70]- {note}[/]")
+
+    def on_session_end(self, result):
+        rep = result.get("reputation", 0)
+        tier = tier_for(rep)
+        # Fetch updated reputation after session completion
+        from agent import revmem_client
+        try:
+            updated = revmem_client.get_agent(result.get("session_id", ""))
+            rep = updated.get("reputation_score", rep)
+            tier = tier_for(rep)
+        except Exception:
+            pass
+        console.print()
+        console.print(render.reputation_bar(rep, tier))
+        console.print()
+
+
+def _parse_fields_from_output(text: str) -> list[dict] | None:
+    """Try to extract fields_compared from agent JSON output for the diff table."""
+    import re
+    # Find JSON object in the output
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    blob = fenced.group(1) if fenced else None
+    if not blob:
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    blob = text[start:i + 1]
+                    break
+    if not blob:
+        return None
+    try:
+        obj = json.loads(blob)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    fields_compared = obj.get("fields_compared")
+    if not isinstance(fields_compared, list):
+        return None
+    result = []
+    for f in fields_compared:
+        if not isinstance(f, dict) or "field" not in f:
+            continue
+        materiality = f.get("materiality", "")
+        if f.get("match") is True:
+            verdict = "match"
+        elif "material" in str(materiality).lower() and "immaterial" not in str(materiality).lower():
+            verdict = "material"
+        elif "immaterial" in str(materiality).lower():
+            verdict = "immaterial"
+        else:
+            verdict = "match" if f.get("match") else "material"
+        result.append({
+            "field": f["field"],
+            "contract": str(f.get("contract_value", "")),
+            "crm": str(f.get("crm_value", "")),
+            "verdict": verdict,
+        })
+    return result if result else None
+
+
+def run_live(session_number: int, wait: bool = True, env_id: str | None = None, prev_interaction: str | None = None) -> dict:
+    from agent.runner import run_session
+    listener = RichListener(wait_for_approvals=wait)
+    return run_session(session_number, env_id=env_id, prev_interaction_id=prev_interaction, listener=listener)
+
+
+def run_live_all(wait: bool = True) -> list[dict]:
+    """Run sessions 1→2→3 with env-ID threading — the full demo narrative."""
+    console.print()
+    console.print(render.divider("RevMem Demo — 3 sessions, continual learning"))
+
+    results = []
+    env_id = None
+    prev_interaction = None
+
+    for session_num in [1, 2, 3]:
+        if session_num > 1:
+            console.print(render.divider(f"Session {session_num}"))
+            console.input("[grey50]Press Enter to continue...[/]")
+
+        result = run_live(session_num, wait=wait, env_id=env_id, prev_interaction=prev_interaction)
+        results.append(result)
+
+        env_id = result.get("environment_id")
+        prev_interaction = result.get("interaction_id")
+
+    console.print()
+    console.print(render.run_summary_table(results))
+    console.print()
+    return results
+
+
+def run_live_repeat(runs: int, wait: bool = True) -> list[dict]:
+    """Run session 3 repeatedly to show long-term self-improvement.
+
+    Each run uses the same deal archetype (Globex) but reputation and
+    memories accumulate in RevMem across runs, so the agent should
+    improve over time.
+    """
+    console.print()
+    console.print(render.divider(f"RevMem Self-Improvement — {runs} runs"))
+
+    results = []
+    env_id = None
+    prev_interaction = None
+
+    for i in range(1, runs + 1):
+        console.print(render.divider(f"Run {i}/{runs}"))
+
+        # Alternate between acme (sessions 1-2) and globex (session 3) to
+        # exercise generalization. After the first 3, cycle session 3.
+        if i <= 3:
+            session_num = i
+        else:
+            session_num = 3
+
+        result = run_live(session_num, wait=wait, env_id=env_id, prev_interaction=prev_interaction)
+        result["run"] = i
+        results.append(result)
+
+        env_id = result.get("environment_id")
+        prev_interaction = result.get("interaction_id")
+
+    console.print()
+    console.print(render.run_summary_table(results))
+    console.print()
+    return results
+
+
+# --- Entry point --------------------------------------------------------------
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RevMem agent-working CLI (scaffold).")
-    parser.add_argument("--session", default="s3", choices=sorted(SCENARIOS), help="scenario to replay")
-    parser.add_argument("--no-wait", action="store_true", help="print approve link and exit instead of polling")
+    parser = argparse.ArgumentParser(description="RevMem agent-working CLI.")
+    parser.add_argument("--live", action="store_true", help="real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)")
+    parser.add_argument("--all", action="store_true", help="run all 3 sessions (1→2→3) with env-ID threading")
+    parser.add_argument("--runs", type=int, default=None, metavar="N", help="repeat N times to show long-term self-improvement")
+    parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
+    parser.add_argument("--no-wait", action="store_true", help="skip approval polling")
     args = parser.parse_args()
-    run_session(args.session, wait=not args.no_wait)
+
+    if args.live:
+        if args.runs:
+            run_live_repeat(args.runs, wait=not args.no_wait)
+        elif args.all:
+            run_live_all(wait=not args.no_wait)
+        else:
+            session_num = int(args.session) if args.session else 3
+            if session_num not in (1, 2, 3):
+                parser.error("--live sessions: 1, 2, or 3")
+            run_live(session_num, wait=not args.no_wait)
+    else:
+        session_name = args.session or "s3"
+        if session_name not in SCAFFOLD_SCENARIOS:
+            parser.error(f"scaffold sessions: {', '.join(sorted(SCAFFOLD_SCENARIOS))}")
+        run_scaffold(session_name, wait=not args.no_wait)
 
 
 if __name__ == "__main__":

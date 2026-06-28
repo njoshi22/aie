@@ -119,3 +119,49 @@ def outcome_panel(outcome: dict) -> Panel:
         body.append(f"{k:<18}", style="bold")
         body.append(f"{v}\n")
     return Panel(body, title="Outcome (logged to RevMem)", border_style="grey50", box=ROUNDED)
+
+
+def run_summary_table(results: list[dict]) -> Table:
+    """Summary table across multiple sessions showing improvement trajectory."""
+    table = Table(
+        title="Self-Improvement Trajectory",
+        title_style="bold",
+        box=ROUNDED,
+        expand=True,
+    )
+    table.add_column("Run", justify="right", style="bold")
+    table.add_column("Deal")
+    table.add_column("Tier")
+    table.add_column("Reputation", justify="right")
+    table.add_column("Memories", justify="right")
+    table.add_column("Accuracy", justify="right")
+    table.add_column("Material caught", justify="right")
+    table.add_column("False esc.", justify="right")
+
+    for r in results:
+        tier = r.get("tier", "?")
+        color = TIER_COLORS.get(tier.lower(), "white")
+        outcome = r.get("outcome", {})
+        table.add_row(
+            str(r.get("session_number", r.get("run", "?"))),
+            r.get("deal", "?").upper(),
+            Text(tier.upper(), style=f"bold {color}"),
+            f"{r.get('reputation', 0):.2f}",
+            str(r.get("memories_used", 0)),
+            f"{outcome.get('accuracy', 0):.1%}" if isinstance(outcome.get("accuracy"), (int, float)) else str(outcome.get("accuracy", "?")),
+            str(outcome.get("material_caught", "?")),
+            str(outcome.get("false_escalations", "?")),
+        )
+    return table
+
+
+def divider(label: str = "") -> Text:
+    """Horizontal divider with optional label."""
+    text = Text()
+    if label:
+        text.append(f"\n{'─'*20} ", style="grey50")
+        text.append(label, style="bold grey70")
+        text.append(f" {'─'*20}\n", style="grey50")
+    else:
+        text.append(f"\n{'─'*60}\n", style="grey50")
+    return text

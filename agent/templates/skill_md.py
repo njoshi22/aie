@@ -1,4 +1,17 @@
+from pathlib import Path
+
+_SKILL_MD_PATH = Path(__file__).resolve().parent.parent.parent / ".agents" / "skills" / "reconciliation" / "SKILL.md"
+
+_BASE_SKILL = _SKILL_MD_PATH.read_text()
+
+
 def generate_skill_md(tier: str) -> str:
+    """Generate a tier-scoped SKILL.md from the base file.
+
+    The base .agents/skills/reconciliation/SKILL.md contains all actions.
+    This function adjusts the available actions and tier section based on
+    the agent's current permission tier.
+    """
     skills = """\
 ---
 name: revops-reconciliation

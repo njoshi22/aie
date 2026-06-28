@@ -5,7 +5,10 @@ Usage: source .venv/bin/activate && GEMINI_API_KEY=... python -m agent.runner --
 import os
 import json
 import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
+
 from google import genai
 
 from agent.templates.agents_md import AGENTS_MD
@@ -21,6 +24,61 @@ from evals.grade import grade
 DATA_DIR = Path(__file__).parent / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
 AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-create by name
+
+
+class RunnerListener(Protocol):
+    """Callback interface for live rendering of agent sessions."""
+
+    def on_session_start(self, session_number: int, deal: str, tier: str, reputation: float, task: str) -> None: ...
+    def on_tool_call(self, name: str, arguments: dict) -> None: ...
+    def on_tool_result(self, name: str, result: dict) -> None: ...
+    def on_memory_retrieved(self, memories: list[dict]) -> None: ...
+    def on_agent_response(self, text: str) -> None: ...
+    def on_approval_needed(self, approval: dict) -> None: ...
+    def on_graded(self, scorecard: object, graded_from_output: bool) -> None: ...
+    def on_session_end(self, result: dict) -> None: ...
+
+
+class _PrintListener:
+    """Default listener — plain print output (original behavior)."""
+
+    def on_session_start(self, session_number, deal, tier, reputation, task):
+        print(f"\n{'='*60}")
+        print(f"SESSION {session_number}")
+        print(f"Deal: {deal.upper()} | Tier: {tier.upper()} | Rep: {reputation}")
+        print(f"Task: {task}")
+        print(f"{'='*60}\n")
+
+    def on_tool_call(self, name, arguments):
+        print(f"  [tool] {name}({json.dumps(arguments)})")
+
+    def on_tool_result(self, name, result):
+        pass
+
+    def on_memory_retrieved(self, memories):
+        if memories:
+            for m in memories:
+                print(f"    memory: {m.get('content', '')[:80]}")
+        else:
+            print("    (no memories found)")
+
+    def on_agent_response(self, text):
+        print(f"\nAgent response:\n{text[:1500]}\n")
+
+    def on_approval_needed(self, approval):
+        link = approval.get("approval_link", "")
+        route = approval.get("route_to", "unknown")
+        print(f"  Routed to {route}: {link}")
+
+    def on_graded(self, scorecard, graded_from_output):
+        source = "agent output" if graded_from_output else "modeled fallback"
+        print(f"\nGraded outcome ({source}): {json.dumps(scorecard.outcome)}")
+        for note in scorecard.notes:
+            print(f"  - {note}")
+
+    def on_session_end(self, result):
+        print(f"Expected (designed): {SCENARIOS[result['session_number']]['expected']['description']}")
+        print(f"Environment ID: {result.get('environment_id', 'n/a')}")
 
 
 def load_deal_data(deal_name: str) -> tuple[dict, dict, dict]:
@@ -104,42 +162,32 @@ def run_session(
     env_id: str | None = None,
     prev_interaction_id: str | None = None,
     stream: bool = True,
+    listener: RunnerListener | None = None,
 ) -> dict:
+    listener = listener or _PrintListener()
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     scenario = SCENARIOS[session_number]
 
     contract, crm, policy = load_deal_data(scenario["deal"])
 
-    # Get-or-create the agent in RevMem (idempotent by name → stable id across runs)
     agent_state = revmem_client.ensure_agent(AGENT_NAME)
     agent_id = agent_state["id"]
     tier = agent_state["permission_tier"]
 
-    print(f"\n{'='*60}")
-    print(f"SESSION {session_number}")
-    print(f"Deal: {scenario['deal'].upper()} | Tier: {tier.upper()} | Rep: {agent_state['reputation_score']}")
-    print(f"Task: {scenario['task']}")
-    print(f"{'='*60}\n")
+    listener.on_session_start(session_number, scenario["deal"], tier, agent_state["reputation_score"], scenario["task"])
 
-    # Start RevMem session
     session = revmem_client.start_session(agent_id, scenario["task"])
     session_id = session["id"]
 
-    # Build prompt — no pre-fetched memories; agent will call retrieve_context itself
     if scenario["prompt_style"] == "cold_start":
         prompt = build_cold_start_prompt(contract, crm)
     else:
         prompt = build_reconciliation_prompt(contract, crm, policy, [], tier)
 
-    # Generate tier-scoped SKILL.md and tools
     skill_content = generate_skill_md(tier)
     tools = get_tools_for_tier(tier)
-
-    # Build Antigravity environment
     environment = build_environment(contract, crm, policy, skill_content, AGENTS_MD)
 
-    # --- Antigravity interaction with tool call loop ---
-    print("Sending to Antigravity agent...")
     create_kwargs = {
         "agent": AGENT_MODEL,
         "input": prompt,
@@ -174,19 +222,19 @@ def run_session(
         for fc in fc_steps:
             tool_name = fc["name"]
             tool_args = fc.get("arguments", {})
-            print(f"  [tool] {tool_name}({json.dumps(tool_args)})")
+            listener.on_tool_call(tool_name, tool_args)
             tool_calls_made.append(tool_name)
 
             tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
+            listener.on_tool_result(tool_name, tool_result)
 
             if tool_name == "retrieve_context":
                 mems = tool_result.get("memories", [])
                 memories_used += len(mems)
-                if mems:
-                    for m in mems:
-                        print(f"    memory: {m.get('content', '')[:80]}")
-                else:
-                    print("    (no memories found)")
+                listener.on_memory_retrieved(mems)
+
+            if tool_name == "route_for_approval" and tool_result.get("approval_id"):
+                listener.on_approval_needed(tool_result)
 
             results.append({
                 "type": "function_result",
@@ -195,7 +243,6 @@ def run_session(
                 "result": tool_result,
             })
 
-        # Continue WITHOUT tools to prevent infinite retry loop
         interaction = client.interactions.create(
             agent=AGENT_MODEL,
             previous_interaction_id=interaction.id,
@@ -204,13 +251,8 @@ def run_session(
         )
 
     output = interaction.output_text or "(no text output)"
-    if tool_calls_made:
-        print(f"  Tools called: {', '.join(tool_calls_made)}")
-    print(f"\nAgent response:\n{output[:1500]}\n")
+    listener.on_agent_response(output)
 
-    # Grade the agent's ACTUAL output against gold labels derived from the data,
-    # instead of trusting scenario["expected"]. Falls back to modeled behavior
-    # only when the transcript yields no parseable decisions (e.g. offline stub).
     decisions = behaviors.decisions_from_output(output)
     graded_from_output = bool(decisions)
     if not decisions:
@@ -236,16 +278,9 @@ def run_session(
         "graded_from_output": graded_from_output,
     }
 
-    # Close the session in RevMem with the MEASURED outcome (updates reputation +
-    # memory relevance).
     revmem_client.complete_session(session_id, outcome)
-
-    source = "agent output" if graded_from_output else "modeled fallback (no parseable decisions)"
-    print(f"\nGraded outcome ({source}): {json.dumps(outcome)}")
-    for note in scorecard.notes:
-        print(f"  - {note}")
-    print(f"Expected (designed): {scenario['expected']['description']}")
-    print(f"Environment ID: {interaction.environment_id}")
+    listener.on_graded(scorecard, graded_from_output)
+    listener.on_session_end(result)
 
     return result
 
