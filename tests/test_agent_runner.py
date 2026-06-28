@@ -90,12 +90,48 @@ def test_interaction_create_reports_wait_timing() -> None:
     )
 
     assert result == {"ok": True}
-    assert client.interactions.calls == [{"agent": "model", "input": "prompt"}]
+    assert client.interactions.calls == [
+        {"background": True, "timeout": runner.AGENT_API_TIMEOUT_S, "agent": "model", "input": "prompt"}
+    ]
     assert listener.events[0] == ("start", "initial response")
     end_event = listener.events[1]
     assert end_event[0:2] == ("end", "initial response")
     assert len(end_event) == 3
     assert end_event[2] >= 0
+
+
+def test_create_interaction_polls_background_until_terminal(monkeypatch) -> None:
+    """Background create returns in_progress; _create_interaction must poll get() until terminal."""
+    class FakeInteraction:
+        def __init__(self, status: str) -> None:
+            self.status = status
+            self.id = "v1_interaction"
+
+    class FakeInteractions:
+        def __init__(self) -> None:
+            self.created_background: bool | None = None
+            self.get_calls = 0
+
+        def create(self, **kwargs: object) -> FakeInteraction:
+            self.created_background = bool(kwargs.get("background"))
+            return FakeInteraction("in_progress")
+
+        def get(self, id: str, **kwargs: object) -> FakeInteraction:
+            self.get_calls += 1
+            return FakeInteraction("requires_action" if self.get_calls >= 2 else "in_progress")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.interactions = FakeInteractions()
+
+    monkeypatch.setattr("agent.runner.time.sleep", lambda _s: None)
+    client = FakeClient()
+
+    result = runner._create_interaction(client, {"agent": "m", "input": "p"}, "lbl", _TimingListener(), debug=False)
+
+    assert client.interactions.created_background is True
+    assert client.interactions.get_calls == 2  # polled until it left in_progress
+    assert result.status == "requires_action"
 
 
 def test_session_one_completion_payload_has_no_hardcoded_lesson() -> None:

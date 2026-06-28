@@ -29,6 +29,9 @@ from agent import revmem_client  # noqa: E402
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
 AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-create by name
+AGENT_API_TIMEOUT_S = 90.0  # per-HTTP-request cap for create/get (each is fast in background mode)
+AGENT_TURN_DEADLINE_S = 300.0  # max wall-clock to await one background agent turn before failing loud
+AGENT_POLL_INTERVAL_S = 3.0  # cadence for polling a backgrounded interaction's status
 
 
 class ScenarioExpected(TypedDict):
@@ -183,11 +186,33 @@ def _notify(listener: RunnerListener, method: str, *args) -> None:
         callback(*args)
 
 
+def _await_interaction(client, interaction, debug: bool):
+    """Poll a backgrounded interaction until it leaves ``in_progress``.
+
+    Hosted-agent turns can run for tens of seconds; a synchronous blocking
+    ``create`` holds the connection for the whole turn and stalls. Background
+    mode returns immediately, so we poll ``get`` instead, failing loud if the
+    turn is still running past the deadline.
+    """
+    deadline = time.perf_counter() + AGENT_TURN_DEADLINE_S
+    while getattr(interaction, "status", None) == "in_progress":
+        if time.perf_counter() > deadline:
+            raise TimeoutError(
+                f"hosted agent turn {getattr(interaction, 'id', '?')} still in_progress "
+                f"after {AGENT_TURN_DEADLINE_S:.0f}s"
+            )
+        time.sleep(AGENT_POLL_INTERVAL_S)
+        interaction = client.interactions.get(interaction.id, timeout=AGENT_API_TIMEOUT_S)
+        _debug(debug, f"[poll] {str(interaction.id)[:14]} status={interaction.status}")
+    return interaction
+
+
 def _create_interaction(client, kwargs: dict, label: str, listener: RunnerListener, debug: bool):
     _notify(listener, "on_agent_api_start", label)
     started = time.perf_counter()
     try:
-        return client.interactions.create(**kwargs)
+        interaction = client.interactions.create(background=True, timeout=AGENT_API_TIMEOUT_S, **kwargs)
+        return _await_interaction(client, interaction, debug)
     finally:
         elapsed = time.perf_counter() - started
         _notify(listener, "on_agent_api_end", label, elapsed)
