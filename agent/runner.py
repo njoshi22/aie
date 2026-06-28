@@ -30,6 +30,12 @@ AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-
 JsonObject = dict[str, Any]
 
 
+class ToolCallRecord(TypedDict):
+    name: str
+    arguments: JsonObject
+    result: JsonObject
+
+
 class ScenarioExpected(TypedDict):
     material_caught: int
     false_escalations: int
@@ -261,7 +267,7 @@ def run_session(
         previous_interaction_id=prev_interaction_id,
     )
     memories_used = 0
-    tool_calls_made = []
+    tool_calls_made: list[ToolCallRecord] = []
 
     max_tool_rounds = 8
     for _ in range(max_tool_rounds):
@@ -279,9 +285,13 @@ def run_session(
             tool_name = fc["name"]
             tool_args = fc.get("arguments", {})
             active_listener.on_tool_call(tool_name, tool_args)
-            tool_calls_made.append(tool_name)
 
             tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
+            tool_calls_made.append({
+                "name": tool_name,
+                "arguments": tool_args,
+                "result": tool_result,
+            })
             active_listener.on_tool_result(tool_name, tool_result)
 
             if tool_name == "retrieve_context":
@@ -331,6 +341,7 @@ def run_session(
         "agent_output": output,
         "interaction_id": interaction.id,
         "environment_id": interaction.environment_id,
+        "tool_calls": tool_calls_made,
         "outcome": outcome,
         "graded_from_output": graded_from_output,
     }
