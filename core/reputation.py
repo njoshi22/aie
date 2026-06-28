@@ -8,6 +8,7 @@ from core.models import Agent, PermissionTier
 SUCCESS_THRESHOLD = 0.5
 INITIAL_REPUTATION_FLOOR = 0.1
 MAX_REPUTATION_STEP = 0.25
+PRODUCTION_FLOOR = 0.3  # == OBSERVER/ANALYST boundary in tier_for; below this, prod writes are locked
 
 
 def tier_for(score: float) -> str:
@@ -45,6 +46,27 @@ def update_after_session(conn: sqlite3.Connection, agent_id: str) -> Agent:
     agent.successful_sessions = successful
     target_score = compute(success_rate, avg_accuracy)
     agent.reputation_score = _bounded_score(agent.reputation_score, target_score)
+    agent.permission_tier = tier_for(agent.reputation_score)
+    database.update_agent(conn, agent)
+    return agent
+
+
+def set_reputation_from_eval(conn: sqlite3.Connection, agent_id: str, eval_score: float,
+                            success_rate: float | None = None,
+                            max_step: float = MAX_REPUTATION_STEP) -> Agent:
+    """Derive reputation directly from an eval score (the optimizer's recovery path).
+
+    Reuses ``compute``/``tier_for`` so it stays consistent with the session-history
+    path in ``update_after_session``. ``max_step`` is overridable so a scripted
+    demo event can move reputation faster than the normal per-session cap.
+    """
+    agent = database.get_agent(conn, agent_id)
+    if agent is None:
+        raise ValueError(f"unknown agent {agent_id}")
+    sr = success_rate if success_rate is not None else (1.0 if eval_score >= SUCCESS_THRESHOLD else 0.0)
+    target = compute(sr, eval_score)
+    delta = max(-max_step, min(max_step, target - agent.reputation_score))
+    agent.reputation_score = max(INITIAL_REPUTATION_FLOOR, min(1.0, round(agent.reputation_score + delta, 3)))
     agent.permission_tier = tier_for(agent.reputation_score)
     database.update_agent(conn, agent)
     return agent

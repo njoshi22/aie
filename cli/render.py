@@ -7,6 +7,8 @@ Everything the judge sees is a terminal panel. These helpers turn RevMem state
 
 from __future__ import annotations
 
+import difflib
+
 from rich.box import ROUNDED, SIMPLE
 from rich.panel import Panel
 from rich.table import Table
@@ -215,6 +217,55 @@ def learning_scorecard(summary: dict) -> Panel | None:
     improved = summary.get("improved")
     title = "Continual learning - measured improvement" if improved else "Continual learning - scorecard"
     return Panel(body, title=title, border_style="green" if improved else "grey50", box=ROUNDED)
+
+
+def prod_lock_panel(reputation: float, floor: float, reason: str = "") -> Panel:
+    """Shown when write_crm trips the reputation circuit breaker (server-enforced)."""
+    body = Text()
+    body.append("  PRODUCTION ACCESS REVOKED\n\n", style="bold red")
+    body.append("write_crm   ", style="bold")
+    body.append("DENIED by governance\n", style="bold red")
+    body.append("reputation  ", style="bold")
+    body.append(f"{reputation:.2f}", style="bold red")
+    body.append(f"  <  floor {floor:.2f}\n", style="grey70")
+    if reason:
+        body.append(reason, style="yellow")
+    return Panel(body, title="GOVERNANCE CIRCUIT BREAKER", border_style="red",
+                 box=ROUNDED, padding=(1, 2))
+
+
+def prod_unlock_panel(reputation: float, floor: float) -> Panel:
+    """Shown after the agent earns reputation back above the floor."""
+    body = Text()
+    body.append("  PRODUCTION ACCESS RESTORED\n\n", style="bold green")
+    body.append("reputation  ", style="bold")
+    body.append(f"{reputation:.2f}", style="bold green")
+    body.append(f"  >=  floor {floor:.2f}\n", style="grey70")
+    body.append("write_crm re-enabled - the agent earned its way back.", style="green")
+    return Panel(body, title="GOVERNANCE - lock cleared", border_style="green",
+                 box=ROUNDED, padding=(1, 2))
+
+
+def prompt_diff_panel(before: str, after: str,
+                      title: str = "OPTIMIZER - skill rewrite") -> Panel:
+    """Unified diff of the SKILL.md the agent rewrote for itself."""
+    diff = difflib.unified_diff(
+        before.splitlines(), after.splitlines(),
+        fromfile="SKILL.md (regressed)", tofile="SKILL.md (self-optimized)", lineterm="",
+    )
+    body = Text()
+    for line in diff:
+        if line.startswith("+") and not line.startswith("+++"):
+            body.append(line + "\n", style="green")
+        elif line.startswith("-") and not line.startswith("---"):
+            body.append(line + "\n", style="red")
+        elif line.startswith("@@"):
+            body.append(line + "\n", style="cyan")
+        else:
+            body.append(line + "\n", style="grey50")
+    if not body.plain.strip():
+        body.append("(no textual change)\n", style="grey50")
+    return Panel(body, title=title, border_style="magenta", box=ROUNDED)
 
 
 def divider(label: str = "") -> Text:

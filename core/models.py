@@ -75,6 +75,23 @@ class Agent(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class SkillVersion(BaseModel):
+    """A versioned copy of an agent's reconciliation skill prompt.
+
+    The optimizer writes a new version each time it accepts a rewrite; exactly
+    one row per agent is ``active`` and supplies the skill injected at runtime.
+    """
+    id: str = Field(default_factory=_uuid)
+    agent_id: str
+    version: int
+    content: str
+    score: float | None = None          # worker aggregate at acceptance (None for v0)
+    parent_version: int | None = None   # lineage for diffing
+    rationale: str | None = None        # optimizer's explanation of the edit
+    active: bool = False
+    created_at: datetime = Field(default_factory=_now)
+
+
 class ApprovalStatus:
     PENDING = "pending"
     APPROVED = "approved"

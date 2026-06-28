@@ -73,7 +73,14 @@ def authorize_write(tier: str, discrepancy: dict[str, Any], approval_status: str
     return WriteDecision.NEEDS_APPROVAL
 
 
-def generate_skill_md(tier: str) -> str:
+def generate_skill_md(tier: str, conn=None, agent_id: str | None = None) -> str:
+    # If the agent has an active (optimizer-authored) skill version, serve that —
+    # it is the live, self-improved skill. Otherwise fall back to the tier template.
+    if conn is not None and agent_id is not None:
+        from core import database
+        active = database.get_active_skill(conn, agent_id)
+        if active is not None:
+            return active.content
     tools = sorted(allowed_tools(tier))
     lines = [f"# RevOps Finance Agent — Skills ({tier})", "",
              "You reconcile signed contracts against the CRM. Available skills:", ""]

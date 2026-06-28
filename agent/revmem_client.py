@@ -52,6 +52,15 @@ def _api_call(method: str, path: str, body: JsonObject | None = None) -> JsonVal
             raw = resp.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
+        # The reputation circuit breaker returns 403 with a `production_locked`
+        # body. Surface that to the caller as data (it is an expected governance
+        # outcome, not a transport failure); everything else still raises.
+        try:
+            parsed = json.loads(e.read() or b"")
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("production_locked"):
+            return parsed
         raise RevMemApiError(f"{method} {path} failed: {e.code} {e.reason}") from e
     except urllib.error.URLError as e:
         raise RevMemApiError(f"{method} {path} failed: {e.reason}") from e

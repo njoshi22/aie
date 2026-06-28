@@ -111,9 +111,41 @@ Run one-off commands with `.env` loaded through `honcho run`:
 honcho run uv run python -m cli.run --continuous
 ```
 
+### Hero Mode: `--self-heal`
+
+Governed recursive self-improvement. The agent's reputation is derived from its eval score; a bad run tanks it below the production floor and a server-enforced circuit breaker locks the agent out of CRM writes. The system then diagnoses the failure, an optimizer (Gemini 3.5 Flash) rewrites the agent's own skill prompt, re-scores it (keeping the edit only if the eval improves), reputation recovers, and production access is restored.
+
+```bash
+export GEMINI_API_KEY=...
+export REVMEM_BASE_URL=http://127.0.0.1:8000
+export REVMEM_STUB_MODE=0
+
+uv run python -m cli.run --self-heal
+```
+
+#### What Happens
+
+```text
+1. Seed         A fresh agent with a shaky record (reputation ~0.33, ANALYST).
+2. Bad run      It reconciles on a regressed skill and botches it -> accuracy 0.
+3. Lock         Reputation drops to ~0.25 (OBSERVER). write_crm returns
+                PRODUCTION LOCKED (403, server-enforced, not a prompt).
+4. Self-heal    The optimizer scores the skill, rewrites it (live Gemini 3.5
+                Flash, with a deterministic fallback), and re-scores it on an
+                accept-if-better basis. The self-authored SKILL.md diff is shown.
+5. Recover      Reputation recovers above the floor (~0.50, ANALYST). Production
+                access is restored, and the recovery run uses the rewritten skill.
+```
+
+Key points:
+- The reputation circuit breaker is enforced in `api/routes.py::write_crm` (`core/circuit_breaker.py`), not by the agent.
+- Skill versions are persisted in the `skill_versions` table; the optimizer (`core/optimizer.py`) writes a new active version and `GET /agents/{id}/skill.md` serves it.
+- The optimizer's objective function is a prompt-sensitive worker scorer (`evals/worker.py`, Gemini 3.5 Flash) that reuses the existing grader and gold labels. The offline harness is prompt-blind, so this is what gives the loop real signal.
+- Reputation is genuinely derived from the eval score via `reputation.set_reputation_from_eval`.
+
 ### Quick Start: `--continuous`
 
-This is the hero mode: one continuous Antigravity interaction chain with live human correction in the middle.
+This is the original hero mode: one continuous Antigravity interaction chain with live human correction in the middle.
 
 Approval claims in final text are not treated as approval evidence. A compliant run must call the service-authorized `route_for_approval` tool when it does not have CRM-write access. Only agents whose `allowed_tools` includes `write_crm` may attempt that governed service method; approval alone does not grant an analyst CRM write access.
 
