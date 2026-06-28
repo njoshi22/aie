@@ -2,14 +2,14 @@
 
 Governed memory + reputation layer for autonomous finance agents. An agent reconciles contract pricing against CRM data, learns from human feedback across sessions, and earns broader autonomy as its reputation improves.
 
-Built on **Gemini Managed Agents (Antigravity)** with a local **FastAPI** governance engine exposed via **ngrok**.
+Built on hosted Gemini/Antigravity interactions, a local **FastAPI** governance engine, and a CLI runner that executes model-requested tools against the API.
 
 ## Prerequisites
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - A Gemini API key ([aistudio.google.com/api-keys](https://aistudio.google.com/api-keys))
-- ngrok (for exposing the local API to the hosted agent)
+- ngrok (optional, only when approval links must be reachable outside localhost)
 
 ## Setup
 
@@ -21,13 +21,52 @@ uv pip install -r requirements.txt
 cp .env.example .env
 # Edit .env:
 #   GEMINI_API_KEY=...
-#   REVMEM_BASE_URL=http://localhost:8000
+#   REVMEM_BASE_URL=http://127.0.0.1:8000
 #   REVMEM_STUB_MODE=0
 ```
 
 ---
 
+## Runtime Pieces
+
+- `api.main`: FastAPI service for agents, sessions, memory, policy, CRM writes, and approval gates. It initializes SQLite and seeds policy/CRM/demo data on startup. By default it writes `db/revmem.db`; set `REVMEM_DB` for an isolated database.
+- `agent.runner`: lower-level hosted-agent executor. It creates Gemini/Antigravity interactions, injects the reconciliation workspace files, executes returned tool calls through `agent.revmem_client`, and logs outcomes back to the API.
+- `agent.demo`: plain three-session wrapper around `agent.runner`.
+- `cli.run`: primary demo entrypoint. Offline scaffold modes do not need Gemini or the API. Live and continuous modes use `agent.runner`, render a Rich terminal transcript, and require `GEMINI_API_KEY` plus a non-stub `REVMEM_BASE_URL`.
+
 ## Running the Demo
+
+### 1. Start the RevMem API
+
+Start this before any live hosted-agent run:
+
+```bash
+export REVMEM_BASE_URL=http://127.0.0.1:8000
+export REVMEM_STUB_MODE=0
+# Optional isolation:
+# export REVMEM_DB=/tmp/revmem-demo.db
+
+uv run uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+The API seeds policy, CRM, and the demo agent during startup. Do not run `data.seed` as a required boot step.
+
+If port `8000` is already taken, pick another port and keep `REVMEM_BASE_URL` in sync:
+
+```bash
+export REVMEM_BASE_URL=http://127.0.0.1:8010
+uv run uvicorn api.main:app --host 127.0.0.1 --port 8010
+```
+
+Approval links are printed by the API server logs. For links that need to work outside the local machine, expose the API and set the public URL before starting both the API process and the CLI:
+
+```bash
+export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# In another terminal:
+ngrok http 8000 --domain=<your-reserved>.ngrok.app
+```
 
 ### Quick Start: `--continuous`
 
@@ -35,20 +74,11 @@ This is the hero mode: one continuous Antigravity interaction chain with live hu
 
 Approval claims in final text are not treated as approval evidence. A compliant run must either call `route_for_approval` directly or attempt a governed service method such as `write_crm`; the service returns `approval_required` with an `approval_request_id` before any gated side effect runs.
 
-**Terminal 1** - start RevMem API + ngrok:
-
-```bash
-uv run python -m data.seed
-uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
-# In another terminal:
-ngrok http 8000 --domain=<your-reserved>.ngrok.app
-```
-
-**Terminal 2** - run the continuous demo:
+In a second terminal:
 
 ```bash
 export GEMINI_API_KEY=...
-export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+export REVMEM_BASE_URL=http://127.0.0.1:8000
 export REVMEM_STUB_MODE=0
 
 uv run python -m cli.run --continuous
@@ -85,29 +115,46 @@ Default feedback if you press Enter:
 
 > The $0.33 monthly invoice difference is a rounding artifact - per DOA-001, differences under $1 should be auto-dismissed, not escalated. Also, the annual schedule mismatch is a schedule_change and should be routed to the Controller per DOA-003, not the CFO.
 
-### Alternative: `--live --all`
+### Other CLI Live Modes
 
-The original scripted flow: three separate sessions with automatic progression. It still works, but uses independent interactions rather than one continuous chain.
-
-```bash
-uv run python -m cli.run --live --all
-```
-
-### Alternative: Single Live Session
+`--live` runs the hosted agent through the Rich CLI transcript. It refuses to run if `REVMEM_BASE_URL` is empty unless you explicitly pass `--allow-stub-live`.
 
 ```bash
-uv run python -m cli.run --live --session 1   # Acme, no memories
-uv run python -m cli.run --live --session 3   # Globex, with memories
+uv run python -m cli.run --live                         # default: session 3
+uv run python -m cli.run --live --session 1             # Acme cold-start session
+uv run python -m cli.run --live --session 3             # Globex learned/generalization session
+uv run python -m cli.run --live --all                   # sessions 1 -> 2 -> 3
+uv run python -m cli.run --live --runs 5                # seed, then repeat learned trials
+uv run python -m cli.run --live --fast --no-wait        # local smoke run without approval polling
+uv run python -m cli.run --live --debug-agent           # print Interactions API step debugging
 ```
+
+Use `--agent-name` to isolate a run. Use `--reuse-agent` when you intentionally want reputation and memories to accumulate on the default demo agent.
+
+### Lower-Level Agent Runner
+
+Use `agent.runner` when you want the plain hosted-agent executor without the Rich CLI wrapper:
+
+```bash
+export GEMINI_API_KEY=...
+export REVMEM_BASE_URL=http://127.0.0.1:8000
+export REVMEM_STUB_MODE=0
+
+uv run python -m agent.runner --session 1
+uv run python -m agent.runner --session 3 --agent-name "RevOps Finance Agent debug"
+uv run python -m agent.demo
+```
+
+`agent.runner` accepts `--env-id` and `--prev-interaction` for manually chaining hosted interactions, plus `--debug` for Interactions API timing and step details.
 
 ### Offline Scaffold
 
-No API key is needed.
+No API key or API server is needed. Leave `REVMEM_BASE_URL` empty or set `REVMEM_STUB_MODE=1`.
 
 ```bash
-uv run python -m cli.run                      # scaffold S3
-uv run python -m cli.run --session s1          # scaffold S1
-uv run python -m cli.run --fast --all          # fast noninteractive
+uv run python -m cli.run                       # scaffold S3
+uv run python -m cli.run --session s1           # scaffold S1
+uv run python -m cli.run --fast --all           # fast noninteractive scaffold
 ```
 
 ---
