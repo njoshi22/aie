@@ -20,7 +20,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from rich.console import Console
 
@@ -78,8 +82,54 @@ SCAFFOLD_SCENARIOS = {
 }
 
 
-def _beat(seconds: float = 0.6) -> None:
-    time.sleep(seconds)
+TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUE_VALUES
+
+
+def _fast_mode(cli_fast: bool = False) -> bool:
+    return cli_fast or _env_flag("REVMEM_CLI_FAST")
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return default
+
+
+def _resolve_delay_scale(delay_scale: float | None = None, fast: bool = False) -> float:
+    if delay_scale is not None:
+        return max(0.0, delay_scale)
+    if _fast_mode(fast):
+        return 0.0
+    return _float_env("REVMEM_DEMO_DELAY_SCALE", 1.0)
+
+
+def _resolve_approval_timeout(timeout: float | None = None) -> float:
+    if timeout is not None:
+        return max(0.0, timeout)
+    return _float_env("REVMEM_APPROVAL_TIMEOUT", 300.0)
+
+
+def _resolve_approval_interval(interval: float | None = None) -> float:
+    value = max(0.0, interval) if interval is not None else _float_env("REVMEM_APPROVAL_INTERVAL", 2.0)
+    return max(0.01, value)
+
+
+def _approval_wait_enabled(no_wait: bool, fast: bool) -> bool:
+    return not no_wait and not _fast_mode(fast)
+
+
+def _beat(seconds: float = 0.6, delay_scale: float | None = None, fast: bool = False) -> None:
+    scaled = seconds * _resolve_delay_scale(delay_scale, fast)
+    if scaled > 0:
+        time.sleep(scaled)
 
 
 def tier_for(score: float) -> str:
@@ -88,7 +138,13 @@ def tier_for(score: float) -> str:
 
 # --- Scaffold mode ------------------------------------------------------------
 
-def run_scaffold(name: str, wait: bool = True) -> None:
+def run_scaffold(
+    name: str,
+    wait: bool = True,
+    delay_scale: float | None = None,
+    approval_timeout: float | None = None,
+    approval_interval: float | None = None,
+) -> None:
     sc = SCAFFOLD_SCENARIOS[name]
     console.print()
     console.print(render.session_header(sc["session_name"], "RevOps Finance Agent", sc["task"]))
@@ -96,13 +152,13 @@ def run_scaffold(name: str, wait: bool = True) -> None:
     console.print()
 
     console.print(render.step(f"get_contract({sc['deal_id']})  +  get_crm_record(...)", status="ok"))
-    _beat()
+    _beat(delay_scale=delay_scale)
 
     if sc["memory"]:
         console.print(render.step("retrieve_context(...)", f'recalled: "{sc["memory"]}"', status="ok"))
     else:
         console.print(render.step("retrieve_context(...)", "no prior memories - cold start", status="warn"))
-    _beat()
+    _beat(delay_scale=delay_scale)
 
     console.print()
     console.print(render.diff_table(sc["fields"]))
@@ -114,13 +170,13 @@ def run_scaffold(name: str, wait: bool = True) -> None:
                 console.print(render.step(f"{f['field']}: rounding artifact", "ESCALATED (cold agent over-flags)", status="warn"))
             else:
                 console.print(render.step(f"{f['field']}: rounding artifact", "dismissed as immaterial", status="ok"))
-            _beat(0.4)
+            _beat(0.4, delay_scale=delay_scale)
         elif f["verdict"] == "material":
             if sc["tier"] == "observer":
                 console.print(render.step(f"{f['field']}: ramp restructuring", "MISSED (no learned context)", status="err"))
             else:
                 console.print(render.step(f"{f['field']}: ramp restructuring", "caught - material, routing for approval", status="ok"))
-            _beat(0.4)
+            _beat(0.4, delay_scale=delay_scale)
 
     if not sc["needs_approval"]:
         console.print()
@@ -140,11 +196,11 @@ def run_scaffold(name: str, wait: bool = True) -> None:
         amount_usd=sc.get("amount_usd"),
     )
     email.send_approval_email(approval)
-    console.print(render.approval_request_panel(sc["approver_email"], approval.approve_url()))
+    console.print(render.approval_request_panel(sc["approver_email"], approval.approve_url(), waiting=wait))
 
     if not wait:
         console.print(
-            f"\n[grey70]--no-wait: approve at the link above, confirm with"
+            f"\n[grey70]Approval wait disabled: approve at the link above, confirm with"
             f"\n  curl -s {approval.status_url()}"
             f"\nThis run will not resume (re-running mints a new approval). Use the default mode for the full gate.[/]\n"
         )
@@ -152,14 +208,18 @@ def run_scaffold(name: str, wait: bool = True) -> None:
 
     try:
         with console.status("[yellow]waiting for CFO approval...[/]", spinner="dots"):
-            decided = wait_for_approval(approval.id)
+            decided = wait_for_approval(
+                approval.id,
+                timeout=_resolve_approval_timeout(approval_timeout),
+                interval=_resolve_approval_interval(approval_interval),
+            )
     except TimeoutError:
         console.print("\n[red]Approval timed out - leaving CRM unchanged.[/]\n")
         return
 
     if decided.status == "approved":
         console.print(render.step("CFO approved", status="ok"))
-        _beat()
+        _beat(delay_scale=delay_scale)
         console.print(render.step(f"write_crm({sc['deal_id']}, corrected_fields)", "ANALYST permission - executed", status="ok"))
         console.print()
         console.print(render.outcome_panel(sc["outcome"]))
@@ -174,8 +234,15 @@ def run_scaffold(name: str, wait: bool = True) -> None:
 class RichListener:
     """Renders real agent events through the Rich CLI panels."""
 
-    def __init__(self, wait_for_approvals: bool = True):
+    def __init__(
+        self,
+        wait_for_approvals: bool = True,
+        approval_timeout: float | None = None,
+        approval_interval: float | None = None,
+    ):
         self._wait = wait_for_approvals
+        self._approval_timeout = approval_timeout
+        self._approval_interval = approval_interval
         self._deal_id: str = ""
         self._tier: str = ""
 
@@ -227,14 +294,17 @@ class RichListener:
             approval.get("summary", ""),
         ))
         if link:
-            console.print(render.approval_request_panel(route, link))
+            console.print(render.approval_request_panel(route, link, waiting=self._wait))
             if self._wait:
                 approval_id = approval.get("approval_id", "")
                 if approval_id:
                     try:
                         with console.status("[yellow]waiting for approval...[/]", spinner="dots"):
-                            from notify.approve import store
-                            decided = wait_for_approval(approval_id)
+                            decided = wait_for_approval(
+                                approval_id,
+                                timeout=_resolve_approval_timeout(self._approval_timeout),
+                                interval=_resolve_approval_interval(self._approval_interval),
+                            )
                         if decided.status == "approved":
                             console.print(render.step("Approved", status="ok"))
                         else:
@@ -256,7 +326,7 @@ class RichListener:
         # Fetch updated reputation after session completion
         from agent import revmem_client
         try:
-            updated = revmem_client.get_agent(result.get("session_id", ""))
+            updated = revmem_client.get_agent(result.get("agent_id", ""))
             rep = updated.get("reputation_score", rep)
             tier = tier_for(rep)
         except Exception:
@@ -316,13 +386,29 @@ def _parse_fields_from_output(text: str) -> list[dict] | None:
     return result if result else None
 
 
-def run_live(session_number: int, wait: bool = True, env_id: str | None = None, prev_interaction: str | None = None) -> dict:
+def run_live(
+    session_number: int,
+    wait: bool = True,
+    env_id: str | None = None,
+    prev_interaction: str | None = None,
+    approval_timeout: float | None = None,
+    approval_interval: float | None = None,
+) -> dict:
     from agent.runner import run_session
-    listener = RichListener(wait_for_approvals=wait)
+    listener = RichListener(
+        wait_for_approvals=wait,
+        approval_timeout=approval_timeout,
+        approval_interval=approval_interval,
+    )
     return run_session(session_number, env_id=env_id, prev_interaction_id=prev_interaction, listener=listener)
 
 
-def run_live_all(wait: bool = True) -> list[dict]:
+def run_live_all(
+    wait: bool = True,
+    approval_timeout: float | None = None,
+    approval_interval: float | None = None,
+    pause_between: bool = True,
+) -> list[dict]:
     """Run sessions 1→2→3 with env-ID threading — the full demo narrative."""
     console.print()
     console.print(render.divider("RevMem Demo — 3 sessions, continual learning"))
@@ -332,11 +418,18 @@ def run_live_all(wait: bool = True) -> list[dict]:
     prev_interaction = None
 
     for session_num in [1, 2, 3]:
-        if session_num > 1:
+        if session_num > 1 and pause_between:
             console.print(render.divider(f"Session {session_num}"))
             console.input("[grey50]Press Enter to continue...[/]")
 
-        result = run_live(session_num, wait=wait, env_id=env_id, prev_interaction=prev_interaction)
+        result = run_live(
+            session_num,
+            wait=wait,
+            env_id=env_id,
+            prev_interaction=prev_interaction,
+            approval_timeout=approval_timeout,
+            approval_interval=approval_interval,
+        )
         results.append(result)
 
         env_id = result.get("environment_id")
@@ -348,7 +441,12 @@ def run_live_all(wait: bool = True) -> list[dict]:
     return results
 
 
-def run_live_repeat(runs: int, wait: bool = True) -> list[dict]:
+def run_live_repeat(
+    runs: int,
+    wait: bool = True,
+    approval_timeout: float | None = None,
+    approval_interval: float | None = None,
+) -> list[dict]:
     """Run session 3 repeatedly to show long-term self-improvement.
 
     Each run uses the same deal archetype (Globex) but reputation and
@@ -372,7 +470,14 @@ def run_live_repeat(runs: int, wait: bool = True) -> list[dict]:
         else:
             session_num = 3
 
-        result = run_live(session_num, wait=wait, env_id=env_id, prev_interaction=prev_interaction)
+        result = run_live(
+            session_num,
+            wait=wait,
+            env_id=env_id,
+            prev_interaction=prev_interaction,
+            approval_timeout=approval_timeout,
+            approval_interval=approval_interval,
+        )
         result["run"] = i
         results.append(result)
 
@@ -394,23 +499,50 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=None, metavar="N", help="repeat N times to show long-term self-improvement")
     parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
     parser.add_argument("--no-wait", action="store_true", help="skip approval polling")
+    parser.add_argument("--fast", action="store_true", help="skip demo pacing and approval polling for local integration checks")
+    parser.add_argument("--approval-timeout", type=float, default=None, help="seconds to wait for approval before timing out")
+    parser.add_argument("--approval-interval", type=float, default=None, help="seconds between approval status polls")
     args = parser.parse_args()
+    fast = _fast_mode(args.fast)
+    wait = _approval_wait_enabled(args.no_wait, fast)
+    delay_scale = _resolve_delay_scale(fast=fast)
 
     if args.live:
         if args.runs:
-            run_live_repeat(args.runs, wait=not args.no_wait)
+            run_live_repeat(
+                args.runs,
+                wait=wait,
+                approval_timeout=args.approval_timeout,
+                approval_interval=args.approval_interval,
+            )
         elif args.all:
-            run_live_all(wait=not args.no_wait)
+            run_live_all(
+                wait=wait,
+                approval_timeout=args.approval_timeout,
+                approval_interval=args.approval_interval,
+                pause_between=not fast,
+            )
         else:
             session_num = int(args.session) if args.session else 3
             if session_num not in (1, 2, 3):
                 parser.error("--live sessions: 1, 2, or 3")
-            run_live(session_num, wait=not args.no_wait)
+            run_live(
+                session_num,
+                wait=wait,
+                approval_timeout=args.approval_timeout,
+                approval_interval=args.approval_interval,
+            )
     else:
         session_name = args.session or "s3"
         if session_name not in SCAFFOLD_SCENARIOS:
             parser.error(f"scaffold sessions: {', '.join(sorted(SCAFFOLD_SCENARIOS))}")
-        run_scaffold(session_name, wait=not args.no_wait)
+        run_scaffold(
+            session_name,
+            wait=wait,
+            delay_scale=delay_scale,
+            approval_timeout=args.approval_timeout,
+            approval_interval=args.approval_interval,
+        )
 
 
 if __name__ == "__main__":
