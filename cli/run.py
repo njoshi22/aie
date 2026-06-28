@@ -29,11 +29,22 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from cli import render
+from evals.scorecard import summarize_sessions
 
 load_dotenv()
 
 console = Console()
 LIVE_AGENT_NAME = "RevOps Finance Agent"
+
+
+def _print_learning_scorecard(results: list[dict]) -> None:
+    """Render the measured continual-learning scorecard after a multi-session run.
+
+    No-ops on mock/empty outcomes (fewer than 2 scored sessions)."""
+    panel = render.learning_scorecard(summarize_sessions(results))
+    if panel is not None:
+        console.print(panel)
+        console.print()
 JsonObject = dict[str, Any]
 
 
@@ -566,6 +577,7 @@ def run_live_all(
     console.print()
     console.print(render.run_summary_table(results))
     console.print()
+    _print_learning_scorecard(results)
     return results
 
 
@@ -623,6 +635,7 @@ def run_live_repeat(
     console.print()
     console.print(render.run_summary_table(results))
     console.print()
+    _print_learning_scorecard(results)
     return results
 
 
@@ -723,6 +736,7 @@ def run_continuous(
     console.print()
     console.print(render.run_summary_table(results))
     console.print()
+    _print_learning_scorecard(results)
     return results
 
 
