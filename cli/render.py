@@ -98,11 +98,14 @@ def routing_panel(discrepancy: str, approver: str, recommended_fix: str | None =
     return Panel(body, title="Governance - approver routing", border_style="magenta", box=ROUNDED)
 
 
-def approval_request_panel(approver_email: str, approve_url: str) -> Panel:
+def approval_request_panel(approver_email: str, approve_url: str, waiting: bool = True) -> Panel:
     body = Text()
     body.append("approval target  ", style="bold")
     body.append(f"{approver_email}\n", style="green")
-    body.append("waiting for human sign-off...\n\n", style="yellow")
+    if waiting:
+        body.append("waiting for human sign-off...\n\n", style="yellow")
+    else:
+        body.append("approval wait disabled for this run\n\n", style="yellow")
     body.append("approve link   ", style="bold")
     body.append(approve_url, style="underline blue")
     return Panel(

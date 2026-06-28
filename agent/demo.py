@@ -4,6 +4,7 @@ Usage: source .venv/bin/activate && GEMINI_API_KEY=... python -m agent.demo
 """
 import argparse
 from agent.runner import run_session
+from agent.scenarios import SCENARIOS
 
 
 def main():
@@ -19,11 +20,17 @@ def main():
     results = []
     env_id = None
     prev_interaction = None
+    prev_deal = None
 
     for session_num in [1, 2, 3]:
         if session_num > 1:
             print(f"\n{'─'*60}")
             input(f"Press Enter to start Session {session_num}...")
+
+        current_deal = SCENARIOS[session_num]["deal"]
+        if current_deal != prev_deal:
+            env_id = None
+            prev_interaction = None
 
         result = run_session(
             session_num, env_id, prev_interaction,
@@ -31,6 +38,7 @@ def main():
         )
         results.append(result)
 
+        prev_deal = current_deal
         env_id = result.get("environment_id")
         prev_interaction = result.get("interaction_id")
 
