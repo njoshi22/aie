@@ -267,7 +267,9 @@ def run_scaffold(
 
     from agent import revmem_client
 
+    agent_state = revmem_client.ensure_agent(LIVE_AGENT_NAME)
     approval = revmem_client.route_for_approval(
+        agent_id=str(agent_state["id"]),
         deal_id=sc["deal_id"],
         amount_usd=float(sc.get("amount_usd", 0)),
         change_type="schedule_change",

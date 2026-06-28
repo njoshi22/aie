@@ -6,18 +6,16 @@ import argparse
 import json
 import os
 import time
-from pathlib import Path
 from typing import Any, NotRequired, Protocol, TypedDict, cast
 
 from dotenv import load_dotenv
 from google import genai
 
 from agent.templates.agents_md import AGENTS_MD
-from agent.templates.skill_md import generate_skill_md
 from agent.prompts import build_reconciliation_prompt, build_feedback_prompt
 from agent.scenarios import SCENARIOS
 from agent.tool_types import JsonObject, ToolCallRecord
-from agent.tools import get_tools_for_tier
+from agent.tools import get_tools_for_allowed_names
 from evals import behaviors
 from evals.gold import GoldItem, build_gold
 from evals.grade import Decision, grade
@@ -26,7 +24,6 @@ load_dotenv()
 
 from agent import revmem_client  # noqa: E402
 
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
 AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-create by name
 AGENT_API_TIMEOUT_S = 90.0  # per-HTTP-request cap for create/get (each is fast in background mode)
@@ -126,53 +123,27 @@ class _PrintListener:
         print(f"  [timing] {name} took {elapsed_s:.1f}s")
 
 
-def load_deal_data(deal_name: str) -> tuple[JsonObject, JsonObject, JsonObject]:
-    contracts = json.loads((DATA_DIR / "contracts.json").read_text())
-    crm_records = json.loads((DATA_DIR / "salesforce.json").read_text())
-    policy = json.loads((DATA_DIR / "policy.json").read_text())
-    return contracts[deal_name], crm_records[deal_name], policy
+def build_environment(skill_content: str, agents_md: str) -> JsonObject:
+    """Remote environment holding only the agent instructions.
 
-
-def build_environment(
-    contract: JsonObject,
-    crm: JsonObject,
-    policy: JsonObject,
-    skill_content: str,
-    agents_md: str,
-) -> JsonObject:
+    No deal data is placed in the environment — the agent obtains the contract,
+    CRM record, policy, and memories exclusively through the service-layer tools,
+    so it cannot shortcut by reading sandbox files.
+    """
     return {
         "type": "remote",
         "sources": [
-            {
-                "type": "inline",
-                "target": ".agents/AGENTS.md",
-                "content": agents_md,
-            },
-            {
-                "type": "inline",
-                "target": ".agents/skills/reconciliation/SKILL.md",
-                "content": skill_content,
-            },
-            {
-                "type": "inline",
-                "target": "/workspace/contract.json",
-                "content": json.dumps(contract, indent=2),
-            },
-            {
-                "type": "inline",
-                "target": "/workspace/crm_record.json",
-                "content": json.dumps(crm, indent=2),
-            },
-            {
-                "type": "inline",
-                "target": "/workspace/policy.json",
-                "content": json.dumps(policy, indent=2),
-            },
+            {"type": "inline", "target": ".agents/AGENTS.md", "content": agents_md},
+            {"type": "inline", "target": ".agents/skills/reconciliation/SKILL.md", "content": skill_content},
         ],
     }
 
 
-_ENV_FILES: dict[str, str] = {}
+def _service_allowed_tools(agent_state: JsonObject) -> list[str]:
+    raw = agent_state.get("allowed_tools")
+    if not isinstance(raw, list) or not all(isinstance(tool, str) for tool in raw):
+        raise ValueError("RevMem agent response missing allowed_tools")
+    return raw
 
 
 def _debug(enabled: bool, message: str) -> None:
@@ -219,13 +190,6 @@ def _create_interaction(client, kwargs: dict, label: str, listener: RunnerListen
         _debug(debug, f"[timing] hosted agent API {label}: {elapsed:.2f}s")
 
 
-def _memory_query_for_scenario(scenario: Scenario) -> str:
-    return (
-        f"{scenario['deal']} reconciliation lessons payment schedule "
-        "ramp rounding discount policy"
-    )
-
-
 def _completion_payload(
     outcome: JsonObject,
     memories_used: list[str],
@@ -269,10 +233,11 @@ def _execute_tool(name: str, arguments: JsonObject, agent_id: str, session_id: s
 
     if name == "route_for_approval":
         result = revmem_client.route_for_approval(
-            str(arguments.get("deal_id", "")),
-            float(arguments.get("amount_usd", 0)),
-            str(arguments.get("change_type", "")),
-            summary=arguments.get("summary", ""),
+            agent_id=agent_id,
+            deal_id=str(arguments.get("deal_id", "")),
+            amount_usd=float(arguments.get("amount_usd", 0)),
+            change_type=str(arguments.get("change_type", "")),
+            summary=str(arguments.get("summary", "")),
         )
         return result
 
@@ -289,18 +254,6 @@ def _execute_tool(name: str, arguments: JsonObject, agent_id: str, session_id: s
             discrepancy=cast(JsonObject, discrepancy) if isinstance(discrepancy, dict) else {},
             approval_request_id=cast(str | None, arguments.get("approval_request_id")),
         )
-
-    if name == "read_file":
-        path = str(arguments.get("path", ""))
-        for key, content in _ENV_FILES.items():
-            if path.endswith(key) or key.endswith(path.lstrip("/.")) or path in key:
-                return {"content": content}
-        return {"error": f"File not found: {path}"}
-
-    if name == "list_files":
-        path = str(arguments.get("path", "."))
-        matches = [key for key in _ENV_FILES if key.startswith(path.rstrip("/")) or path == "."]
-        return {"files": matches}
 
     return {"error": f"Unknown tool: {name}", "skipped": True}
 
@@ -392,12 +345,11 @@ def run_session(
     deal = scenario["deal"]
     task = scenario["task"]
 
-    contract, crm, policy = load_deal_data(deal)
-
     agent_state = revmem_client.ensure_agent(agent_name)
     agent_id = str(agent_state["id"])
     tier = str(agent_state["permission_tier"])
     reputation = float(agent_state["reputation_score"])
+    allowed_tool_names = _service_allowed_tools(agent_state)
 
     active_listener.on_session_start(session_number, deal, tier, reputation, task)
 
@@ -405,30 +357,11 @@ def run_session(
     session_id = str(session["id"])
     memories_used = 0
     memories_used_ids: list[str] = []
-    prefetched_memories: list[dict] = []
 
-    query = _memory_query_for_scenario(scenario)
-    _notify(active_listener, "on_tool_call", "retrieve_context", {"query": query, "mode": "prefetch"})
-    tool_started = time.perf_counter()
-    bundle = revmem_client.retrieve_context(agent_id, query)
-    prefetched_memories = bundle.get("memories", []) if isinstance(bundle, dict) else bundle
-    _notify(active_listener, "on_tool_timing", "retrieve_context", time.perf_counter() - tool_started)
-    _notify(active_listener, "on_memory_retrieved", prefetched_memories)
-    memories_used = len(prefetched_memories)
-    memories_used_ids.extend(
-        str(m["id"]) for m in prefetched_memories
-        if isinstance(m, dict) and m.get("id")
-    )
-
-    prompt = build_reconciliation_prompt(contract, crm, policy, prefetched_memories, tier)
-
-    skill_content = generate_skill_md(tier)
-    tools = get_tools_for_tier(tier)
-    environment = build_environment(contract, crm, policy, skill_content, AGENTS_MD)
-
-    _ENV_FILES.clear()
-    for src in environment["sources"]:
-        _ENV_FILES[src["target"]] = src["content"]
+    prompt = build_reconciliation_prompt(deal, allowed_tool_names)
+    skill_content = revmem_client.get_skill_md(agent_id)
+    tools = get_tools_for_allowed_names(allowed_tool_names)
+    environment = build_environment(skill_content, AGENTS_MD)
 
     create_kwargs: dict[str, Any] = {
         "agent": AGENT_MODEL,
@@ -594,17 +527,8 @@ def send_feedback(
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     agent_state = revmem_client.get_agent(agent_id)
-    tier = str(agent_state["permission_tier"])
-    tools = get_tools_for_tier(tier)
+    tools = get_tools_for_allowed_names(_service_allowed_tools(agent_state))
     prompt = build_feedback_prompt(feedback_text)
-
-    _ENV_FILES.clear()
-    skill_content = generate_skill_md(tier)
-    for target, content in [
-        (".agents/AGENTS.md", AGENTS_MD),
-        (".agents/skills/reconciliation/SKILL.md", skill_content),
-    ]:
-        _ENV_FILES[target] = content
 
     create_kwargs: dict[str, Any] = {
         "agent": AGENT_MODEL,

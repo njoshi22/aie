@@ -145,18 +145,89 @@ def test_session_one_completion_payload_has_no_hardcoded_lesson() -> None:
     assert "lesson" not in payload
 
 
-def test_prompt_uses_prefetched_memories_without_forcing_tool_call() -> None:
+def test_prompt_directs_service_layer_tool_use_without_inline_data() -> None:
     prompt = build_reconciliation_prompt(
-        {"deal_id": "acme"},
-        {"deal_id": "acme"},
-        {"rules": []},
-        [{"content": "Always compare annual schedules."}],
-        "observer",
+        "acme",
+        {"get_contract", "get_crm_record", "retrieve_context", "route_for_approval"},
     )
 
-    assert "RELEVANT LESSONS FROM PAST RECONCILIATIONS" in prompt
-    assert "do not call retrieve_context unless the context is missing" in prompt
-    assert "classify sub-$1 rounding differences as immaterial" in prompt
+    # No data is embedded — the agent must fetch via tools.
+    assert "No data is included in this prompt" in prompt
+    assert "get_contract" in prompt and "get_crm_record" in prompt
+    assert "retrieve_context first" in prompt
+    # Observer escalates via route_for_approval and may not write CRM.
+    assert "route_for_approval" in prompt
+    assert "may NOT write to CRM" in prompt
+    assert "write_crm" not in prompt
+    # Output contract points at AGENTS.md schema.
+    assert "fields_compared schema" in prompt
+
+
+def test_prompt_analyst_uses_write_crm() -> None:
+    prompt = build_reconciliation_prompt(
+        "globex",
+        {"get_contract", "get_crm_record", "retrieve_context", "write_crm", "get_approval_status"},
+    )
+    assert "write_crm" in prompt
+    assert "get_approval_status" in prompt
+
+
+def test_run_session_uses_service_allowed_tools_and_skill_md(monkeypatch) -> None:
+    class FakeInteraction:
+        status = "completed"
+        output_text = "{}"
+        id = "interaction-completed"
+        environment_id = "env-1"
+        steps: list[object] = []
+
+    class FakeInteractions:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def create(self, **kwargs: object) -> FakeInteraction:
+            self.calls.append(kwargs)
+            return FakeInteraction()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.interactions = FakeInteractions()
+
+    fake_client = FakeClient()
+    completed: list[dict[str, object]] = []
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr("agent.runner.genai.Client", lambda api_key: fake_client)
+    monkeypatch.setattr(
+        "agent.runner.revmem_client.ensure_agent",
+        lambda name: {
+            "id": "agent-1",
+            "permission_tier": "observer",
+            "reputation_score": 0.1,
+            "allowed_tools": ["route_for_approval", "get_contract", "log_outcome"],
+        },
+    )
+    monkeypatch.setattr("agent.runner.revmem_client.get_skill_md", lambda agent_id: f"# service skill for {agent_id}")
+    monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
+    monkeypatch.setattr("agent.runner.revmem_client.complete_session", lambda session_id, outcome: completed.append(outcome) or {})
+
+    runner.run_session(3)
+
+    initial_call = fake_client.interactions.calls[0]
+    assert [tool["name"] for tool in cast(list[dict[str, object]], initial_call["tools"])] == [
+        "get_contract",
+        "route_for_approval",
+    ]
+    environment = cast(dict[str, object], initial_call["environment"])
+    sources = cast(list[dict[str, str]], environment["sources"])
+    skill_sources = [source for source in sources if source["target"].endswith("SKILL.md")]
+    assert skill_sources == [
+        {
+            "type": "inline",
+            "target": ".agents/skills/reconciliation/SKILL.md",
+            "content": "# service skill for agent-1",
+        }
+    ]
+    assert "write_crm" not in str(initial_call["input"])
 
 
 def _gold_schedule() -> GoldItem:
@@ -355,7 +426,12 @@ def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch
     monkeypatch.setattr("agent.runner.genai.Client", lambda api_key: FakeClient())
     monkeypatch.setattr(
         "agent.runner.revmem_client.ensure_agent",
-        lambda name: {"id": "agent-1", "permission_tier": "observer", "reputation_score": 0.1},
+        lambda name: {
+            "id": "agent-1",
+            "permission_tier": "observer",
+            "reputation_score": 0.1,
+            "allowed_tools": ["get_contract", "get_crm_record", "retrieve_context", "route_for_approval"],
+        },
     )
     monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
     monkeypatch.setattr("agent.runner.revmem_client.retrieve_context", lambda agent_id, query: {"memories": [], "policy": []})
@@ -486,6 +562,15 @@ def test_run_session_records_service_method_approval_request(monkeypatch) -> Non
             "id": "agent-1",
             "permission_tier": PermissionTier.ANALYST,
             "reputation_score": 0.35,
+            "allowed_tools": [
+                "get_contract",
+                "get_crm_record",
+                "retrieve_context",
+                "route_for_approval",
+                "get_approval_status",
+                "write_crm",
+                "store_memory",
+            ],
         },
     )
     monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
@@ -556,7 +641,12 @@ def test_run_session_executes_repeated_tool_name_across_rounds(monkeypatch) -> N
     monkeypatch.setattr("agent.runner.genai.Client", lambda api_key: fake_client)
     monkeypatch.setattr(
         "agent.runner.revmem_client.ensure_agent",
-        lambda name: {"id": "agent-1", "permission_tier": "observer", "reputation_score": 0.1},
+        lambda name: {
+            "id": "agent-1",
+            "permission_tier": "observer",
+            "reputation_score": 0.1,
+            "allowed_tools": ["get_contract", "get_crm_record", "retrieve_context", "route_for_approval"],
+        },
     )
     monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
     monkeypatch.setattr("agent.runner.revmem_client.retrieve_context", lambda agent_id, query: {"memories": [], "policy": []})
@@ -615,6 +705,39 @@ def test_write_crm_tool_executes_client_call(monkeypatch) -> None:
     assert result["ok"] is True
     assert calls[0][0] == "agent-1"
     assert calls[0][1] == "globex"
+
+
+def test_route_for_approval_tool_injects_agent_id(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_route_for_approval(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"approval_request_id": "req-1", "route_to": "controller"}
+
+    monkeypatch.setattr("agent.revmem_client.route_for_approval", fake_route_for_approval)
+
+    result = runner._execute_tool(
+        "route_for_approval",
+        {
+            "deal_id": "globex",
+            "amount_usd": 40000,
+            "change_type": "schedule_change",
+            "summary": "Schedule mismatch",
+        },
+        "agent-1",
+        "session-1",
+    )
+
+    assert result["approval_request_id"] == "req-1"
+    assert calls == [
+        {
+            "agent_id": "agent-1",
+            "deal_id": "globex",
+            "amount_usd": 40000.0,
+            "change_type": "schedule_change",
+            "summary": "Schedule mismatch",
+        }
+    ]
 
 
 def test_get_approval_status_tool_executes_client_call(monkeypatch) -> None:

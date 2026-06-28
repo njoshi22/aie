@@ -1,6 +1,6 @@
 # RevMem
 
-Governed memory + reputation layer for autonomous finance agents. An agent reconciles contract pricing against CRM data, learns from human feedback across sessions, and earns broader autonomy as its reputation improves.
+Governed context, reputation, and policy layer for autonomous finance agents. An agent reconciles contract pricing against CRM data, learns from human feedback across sessions, and earns broader autonomy as its reputation improves.
 
 Built on hosted Gemini/Antigravity interactions, a local **FastAPI** governance engine, and a CLI runner that executes model-requested tools against the API.
 
@@ -30,7 +30,7 @@ cp .env.example .env
 ## Runtime Pieces
 
 - `api.main`: FastAPI service for agents, sessions, memory, policy, CRM writes, and approval gates. It initializes SQLite and seeds policy/CRM/demo data on startup. By default it writes `db/revmem.db`; set `REVMEM_DB` for an isolated database.
-- `agent.runner`: lower-level hosted-agent executor. It creates Gemini/Antigravity interactions, injects the reconciliation workspace files, executes returned tool calls through `agent.revmem_client`, and logs outcomes back to the API.
+- `agent.runner`: lower-level hosted-agent executor. It creates Gemini/Antigravity interactions, injects static `.agents` guidance plus the service-generated `/agents/{id}/skill.md`, exposes only tools listed in the agent's service `allowed_tools`, executes returned tool calls through `agent.revmem_client`, and logs outcomes back to the API.
 - `agent.demo`: plain three-session wrapper around `agent.runner`.
 - `cli.run`: primary demo entrypoint. Offline scaffold modes do not need Gemini or the API. Live and continuous modes use `agent.runner`, render a Rich terminal transcript, and require `GEMINI_API_KEY` plus a non-stub `REVMEM_BASE_URL`.
 
@@ -87,7 +87,7 @@ REVMEM_AGENT_ARGS="--session 1 --debug-agent" honcho start
 
 This is the hero mode: one continuous Antigravity interaction chain with live human correction in the middle.
 
-Approval claims in final text are not treated as approval evidence. A compliant run must either call `route_for_approval` directly or attempt a governed service method such as `write_crm`; the service returns `approval_required` with an `approval_request_id` before any gated side effect runs.
+Approval claims in final text are not treated as approval evidence. A compliant run must either call the service-authorized `route_for_approval` tool directly or attempt a governed service method such as `write_crm`; the service returns `approval_required` with an `approval_request_id` before any gated side effect runs.
 
 For the local demo, human approvers can open unauthenticated inboxes such as `/approval-inbox/controller`, `/approval-inbox/cfo`, or `/approval-inbox/cco`. Each inbox shows pending approval links for that role. The approval form records approve/deny decisions plus comments; trusted reroute comments that mention another known persona can create the next approval task.
 
@@ -122,6 +122,7 @@ Step 3: Globex Inc - testing generalization
 ```
 
 Key talking points:
+
 - All three steps share one `environment_id`, giving true Antigravity state continuity.
 - Human correction is real typed input, not hardcoded.
 - The agent decides what to store via `store_memory`.
@@ -207,7 +208,7 @@ flowchart LR
     Core["core<br/>memory, reputation, policy, sessions"]
     DB[("SQLite<br/>db/revmem.db or REVMEM_DB")]
     Data["data<br/>contracts, Salesforce, policy seeds"]
-    AgentConfig[".agents + agent/templates<br/>persona and reconciliation skill"]
+    AgentConfig[".agents + /agents/{id}/skill.md<br/>service-authorized agent instructions"]
     Approver["Human approver<br/>approval page from API logs"]
     Evals["evals<br/>gold labels and grading"]
 
@@ -252,7 +253,7 @@ flowchart LR
 │   ├── tool_types.py                # Shared tool evidence types
 │   ├── revmem_client.py             # HTTP client for the RevMem API
 │   ├── spike.py                     # Local proof-of-concept spike script
-│   ├── templates/                   # Generated AGENTS.md and tiered SKILL.md content
+│   ├── templates/                   # Static AGENTS.md loader for hosted environments
 │   └── data/                        # Agent-local Acme/Globex contract, CRM, and policy fixtures
 ├── api/                             # FastAPI service boundary
 │   ├── main.py                      # App factory, SQLite lifecycle, and seed loading
@@ -292,7 +293,7 @@ flowchart LR
 
 ## Key Concepts
 
-- **Reputation tiers**: OBSERVER (0.0-0.3) -> ANALYST (0.3-0.6) -> AUTONOMOUS (0.6-1.0). Higher reputation means broader permissions.
+- **Reputation tiers**: OBSERVER (0.0-0.3) -> ANALYST (0.3-0.6) -> AUTONOMOUS (0.6-1.0). The DB-backed agent row stores the current tier; the API returns `allowed_tools` and `/agents/{id}/skill.md`, and `agent/` only adapts those service decisions into hosted-agent tool declarations and instructions.
 - **Approval gate**: Service-enforced at the route/method level. Each side-effect method has an explicit approval policy defining whether approval is required, whether approvers are `any` or `all`, and whether one approval depends on another. Service methods either execute, return `approval_required` with an `approval_request_id`, or reject the request. The runner only displays and records service results.
 - **Continual learning**: Human feedback -> agent stores lesson via `store_memory` -> future sessions retrieve via `retrieve_context` -> behavior improves.
 - **Continuous interaction chain**: `--continuous` keeps one `environment_id` and chains via `previous_interaction_id`, so the agent's cognitive state evolves within a single Antigravity session.

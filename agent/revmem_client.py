@@ -160,14 +160,27 @@ def get_crm_record(deal_id: str) -> JsonObject:
 
 
 def route_for_approval(
-    deal_id: str, amount_usd: float, change_type: str, **extra: Any
+    *,
+    agent_id: str,
+    deal_id: str,
+    amount_usd: float,
+    change_type: str,
+    summary: str | None = None,
+    **extra: Any,
 ) -> JsonObject:
     """Route a discrepancy for approval.
 
     The canonical API returns approval_request_id, approver task IDs, route_to,
     and status. It does not return the human approval token or link to the agent.
     """
-    body: JsonObject = {"deal_id": deal_id, "amount_usd": amount_usd, "change_type": change_type}
+    body: JsonObject = {
+        "agent_id": agent_id,
+        "deal_id": deal_id,
+        "amount_usd": amount_usd,
+        "change_type": change_type,
+    }
+    if summary is not None:
+        body["summary"] = summary
     body.update(extra)
     return _expect_object(_api_call("POST", "/route_for_approval", body), "/route_for_approval")
 

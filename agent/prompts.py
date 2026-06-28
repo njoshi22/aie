@@ -1,66 +1,59 @@
-"""Prompt templates for contract reconciliation sessions."""
-import json
+"""Prompt templates for contract reconciliation sessions.
+
+The agent is given no data inline — it must obtain everything through the
+service-layer function tools (``retrieve_context``, ``get_contract``,
+``get_crm_record``) and act through governed tools (``route_for_approval``,
+``write_crm``). This keeps the agent on the audited service layer instead of
+reading sandbox files.
+"""
+
+from collections.abc import Iterable
 
 
-def build_reconciliation_prompt(
-    contract: dict,
-    crm: dict,
-    policy: dict,
-    memories: list[dict],
-    tier: str,
-) -> str:
+def build_reconciliation_prompt(deal_id: str, allowed_tool_names: Iterable[str]) -> str:
+    allowed_tools = set(allowed_tool_names)
     prompt = (
-        "You are performing a contract-CRM reconciliation.\n\n"
-        f"SIGNED CONTRACT:\n{json.dumps(contract, indent=2)}\n\n"
-        f"CRM RECORD:\n{json.dumps(crm, indent=2)}\n\n"
-        f"DELEGATION OF AUTHORITY POLICY:\n{json.dumps(policy, indent=2)}\n\n"
+        f"Reconcile deal '{deal_id}' (signed contract vs. CRM record).\n\n"
+        "No data is included in this prompt — obtain everything by calling your tools.\n\n"
+        "STEPS:\n"
+        "1. Call retrieve_context first to load lessons from past reconciliations AND the "
+        'delegation-of-authority policy (returned under "policy"). Apply any retrieved lessons.\n'
+        f'2. Call get_contract with deal_id "{deal_id}" — the signed contract is the source of truth.\n'
+        f'3. Call get_crm_record with deal_id "{deal_id}" — the current (possibly stale) CRM record.\n'
+        "4. Compare every pricing field individually between the contract and the CRM record.\n"
+        "5. Classify each mismatch material or immaterial using the policy from retrieve_context "
+        "(differences under $1 are immaterial rounding).\n"
     )
 
-    if memories:
-        prompt += "RELEVANT LESSONS FROM PAST RECONCILIATIONS:\n"
-        for mem in memories:
-            prompt += f"- {mem.get('content', '')}\n"
-        prompt += "\nUse these lessons to inform your analysis.\n\n"
-
-    retrieve_instruction = (
-        "1. First, call retrieve_context to check for lessons from past reconciliations.\n"
-        if not memories else
-        "1. Use the relevant lessons already provided; do not call retrieve_context unless the context is missing.\n"
-    )
-
-    prompt += (
-        "INSTRUCTIONS:\n"
-        f"{retrieve_instruction}"
-        "2. Compare every pricing field between the contract and CRM record.\n"
-        "3. For each field, state whether it matches or not.\n"
-        "4. For mismatches, classify as material or immaterial.\n"
-        "5. Route material discrepancies to the correct approver using the returned policy.\n"
-        "6. If write_crm returns approval_required, poll get_approval_status with approval_request_id.\n"
-        "7. If the request is approved and your tier allows writes, retry write_crm with the exact "
-        "approved discrepancy, corrected fields, and approval_request_id. If pending or rejected, do not retry.\n"
-        "8. Output your analysis as the JSON format specified in AGENTS.md.\n"
-    )
-
-    if tier == "observer":
+    if "write_crm" in allowed_tools:
         prompt += (
-            "\nYou are in OBSERVER mode. You may not write to CRM. "
-            "Escalate material discrepancies, but classify sub-$1 rounding "
-            "differences as immaterial instead of escalating them.\n"
+            "6. For every MATERIAL discrepancy, call write_crm with the corrected fields and the "
+            "discrepancy. If write_crm returns approval_required, poll get_approval_status with the "
+            "approval_request_id, then retry write_crm only after approval using the exact approved "
+            "correction and approval_request_id. Use route_for_approval if that tool is available and "
+            "a change exceeds your authority.\n"
+            "\nYour service-authorized tool set includes write_crm: request CRM corrections through "
+            "the governed service method, and auto-dismiss immaterial differences (< $1).\n"
         )
-    elif tier == "analyst":
+    elif "route_for_approval" in allowed_tools:
         prompt += (
-            "\nYou are in ANALYST mode. You may auto-dismiss immaterial differences "
-            "(under $1) and recommend CRM corrections for approval.\n"
+            "6. For every MATERIAL discrepancy, call route_for_approval (deal_id, amount_usd, "
+            "change_type, summary) to escalate it to the correct approver per policy.\n"
+            "\nYour service-authorized tool set does not include a CRM-write tool: you may NOT write to CRM. "
+            "Escalate material discrepancies via route_for_approval, and classify sub-$1 rounding "
+            "differences as immaterial.\n"
         )
-    elif tier == "autonomous":
+    else:
         prompt += (
-            "\nYou are in AUTONOMOUS mode. You may auto-reconcile policy-covered "
-            "corrections and only escalate genuine judgment calls.\n"
+            "6. No CRM write or approval-routing tool is available. Do not claim that a material "
+            "discrepancy was routed or corrected unless a governed tool call actually does it.\n"
         )
 
     prompt += (
-        "\nWhen you receive feedback or corrections from a reviewer, store the "
-        "lesson using store_memory so you can apply it in future reconciliations.\n"
+        "7. Do NOT merely describe routing in text — the governed tool in step 6 MUST actually be "
+        "called for every material discrepancy.\n"
+        "8. Output your final analysis as the JSON object specified in AGENTS.md (the fields_compared schema).\n"
+        "\nIf a reviewer later gives feedback, call store_memory to persist the lesson for future reconciliations.\n"
     )
 
     return prompt

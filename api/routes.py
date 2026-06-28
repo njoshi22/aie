@@ -64,9 +64,11 @@ class CreateMemory(BaseModel):
 
 
 class Discrepancy(BaseModel):
+    agent_id: str
     deal_id: str = ""
     amount_usd: float = 0.0
     change_type: str | None = None
+    summary: str = ""
 
 
 class CrmWrite(BaseModel):
@@ -227,15 +229,21 @@ def retrieve_memory(agent_id: str, query: str, request: Request,
 @router.post("/route_for_approval")
 def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
     conn = _conn(request)
+    agent = database.get_agent(conn, body.agent_id)
+    if not agent:
+        raise HTTPException(404, "unknown agent")
+    if not governance.can_use(agent.permission_tier, "route_for_approval"):
+        raise HTTPException(403, f"tier {agent.permission_tier} cannot route_for_approval")
+    discrepancy = body.model_dump(exclude={"agent_id", "summary"})
     policy_rules = database.list_policy(conn)
-    approver = governance.route(body.model_dump(), policy_rules)
+    approver = governance.route(discrepancy, policy_rules)
     gate = ensure_method_approved(
         conn,
         "crm.write",
         {
             "tier": PermissionTier.ANALYST,
             "deal_id": body.deal_id,
-            "discrepancy": body.model_dump(),
+            "discrepancy": discrepancy,
         },
         policy_rules=policy_rules,
     )

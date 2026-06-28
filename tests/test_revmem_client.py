@@ -89,7 +89,12 @@ def test_client_route_status_write_shapes(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(client, "_api_call", fake_api)
 
-    routed = client.route_for_approval("acme", 40000, "schedule_change")
+    routed = client.route_for_approval(
+        agent_id="agent-1",
+        deal_id="acme",
+        amount_usd=40000,
+        change_type="schedule_change",
+    )
     status = client.get_approval_status(routed["approval_request_id"])
     written = client.write_crm(
         "agent-1",
@@ -102,7 +107,11 @@ def test_client_route_status_write_shapes(monkeypatch: pytest.MonkeyPatch) -> No
     assert status["status"] == "approved"
     assert written["ok"] is True
     assert calls == [
-        ("POST", "/route_for_approval", {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}),
+        (
+            "POST",
+            "/route_for_approval",
+            {"agent_id": "agent-1", "deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+        ),
         ("GET", "/approval-requests/req-1/status", None),
         (
             "POST",
@@ -123,7 +132,12 @@ def test_stub_route_for_approval_does_not_return_clickable_secret_link(
 ) -> None:
     client = _reload_client(monkeypatch, None)
 
-    routed = client.route_for_approval("globex", 40000, "schedule_change")
+    routed = client.route_for_approval(
+        agent_id="agent-1",
+        deal_id="globex",
+        amount_usd=40000,
+        change_type="schedule_change",
+    )
 
     assert routed["approval_request_id"] == "req-stub-001"
     assert routed["approval_id"] == "appr-stub-001"

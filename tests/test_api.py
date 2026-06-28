@@ -37,15 +37,26 @@ def test_agent_and_skill(client):
 
 
 def test_route_for_approval(client):
+    agent_id = _make_agent(client, PermissionTier.OBSERVER)
     r = client.post("/route_for_approval",
-                    json={"amount_usd": 40000, "change_type": "schedule_change"})
+                    json={"agent_id": agent_id, "amount_usd": 40000, "change_type": "schedule_change"})
     assert r.json()["route_to"] == "controller"
     r = client.post("/route_for_approval",
-                    json={"amount_usd": 0, "change_type": "discount_over_authority"})
+                    json={"agent_id": agent_id, "amount_usd": 0, "change_type": "discount_over_authority"})
     assert r.json()["route_to"] == "cfo_cco"
 
 
+def test_route_for_approval_rejects_unknown_agent(client):
+    r = client.post(
+        "/route_for_approval",
+        json={"agent_id": "missing", "deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+    )
+
+    assert r.status_code == 404
+
+
 def test_route_for_approval_uses_db_policy_for_created_approval_role(client):
+    agent_id = _make_agent(client, PermissionTier.OBSERVER)
     conn = client.app.state.conn
     rule = database.get_policy(conn, "DOA-003")
     assert rule is not None
@@ -54,7 +65,7 @@ def test_route_for_approval_uses_db_policy_for_created_approval_role(client):
 
     routed = client.post(
         "/route_for_approval",
-        json={"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+        json={"agent_id": agent_id, "deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
     ).json()
 
     assert routed["route_to"] == "finance_admin"
