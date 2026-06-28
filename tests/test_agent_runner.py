@@ -3,12 +3,19 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
+import pytest
+
 from agent import runner
 from agent.prompts import build_reconciliation_prompt
 from agent.scenarios import SCENARIOS
 from agent.tool_types import JsonObject, ToolCallRecord
 from evals.gold import GoldItem
 from evals.grade import Decision, grade
+
+
+@pytest.fixture(autouse=True)
+def _disable_streaming_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("REVMEM_STREAM", raising=False)
 
 
 def test_tool_call_record_shape() -> None:
@@ -53,6 +60,9 @@ class _TimingListener:
         pass
 
     def on_memory_retrieved(self, memories: list[JsonObject]) -> None:
+        pass
+
+    def on_agent_delta(self, text: str) -> None:
         pass
 
     def on_agent_response(self, text: str) -> None:

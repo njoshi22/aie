@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 from agent import revmem_client
@@ -76,6 +77,30 @@ def test_main_live_all_uses_fresh_agent_by_default(monkeypatch) -> None:
         "agent_name": "fresh-agent",
         "debug": False,
     }
+
+
+def test_main_stream_flag_enables_interaction_streaming(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_continuous(
+        wait: bool = True,
+        approval_timeout: float | None = None,
+        approval_interval: float | None = None,
+        agent_name: str | None = None,
+        debug: bool = False,
+    ) -> list[dict[str, object]]:
+        captured.update(stream=os.environ.get("REVMEM_STREAM"), debug=debug)
+        return []
+
+    monkeypatch.delenv("REVMEM_STREAM", raising=False)
+    monkeypatch.setattr(revmem_client, "STUB_MODE", False)
+    monkeypatch.setattr(revmem_client, "REVMEM_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(cli_run, "run_continuous", fake_run_continuous)
+    monkeypatch.setattr(sys, "argv", ["cli.run", "--continuous", "--stream", "--fast"])
+
+    cli_run.main()
+
+    assert captured == {"stream": "1", "debug": False}
 
 
 def test_run_live_all_resets_context_when_deal_changes(monkeypatch) -> None:

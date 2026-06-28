@@ -23,6 +23,8 @@ cp .env.example .env
 #   GEMINI_API_KEY=...
 #   REVMEM_BASE_URL=http://127.0.0.1:8000
 #   REVMEM_STUB_MODE=0
+#   REVMEM_TOOL_TRANSPORT=mcp
+#   REVMEM_STREAM=1          # optional: live SSE visibility for the demo
 ```
 
 ---
@@ -36,17 +38,28 @@ cp .env.example .env
 
 ## Running the Demo
 
-### 1. Start the RevMem API
+### 1. Configure `.env`
+
+Live demo commands should be run through Honcho so `.env` is the source of truth:
+
+```bash
+GEMINI_API_KEY=...
+REVMEM_BASE_URL=http://127.0.0.1:8000
+REVMEM_STUB_MODE=0
+REVMEM_TOOL_TRANSPORT=mcp
+REVMEM_STREAM=1
+REVMEM_DB=/tmp/revmem-demo.db
+REVMEM_PORT=8000
+```
+
+`REVMEM_STREAM=1` is optional, but it is the recommended demo setting: the hosted-agent turn streams SSE events such as `thought`, `function_call`, and `function_result` instead of hiding progress behind background polling. Leave it unset or set it to `0` to keep the default background-poll mode.
+
+### 2. Start the RevMem API
 
 Start this before any live hosted-agent run:
 
 ```bash
-export REVMEM_BASE_URL=http://127.0.0.1:8000
-export REVMEM_STUB_MODE=0
-# Optional isolation:
-# export REVMEM_DB=/tmp/revmem-demo.db
-
-uv run uvicorn api.main:app --host 127.0.0.1 --port 8000
+honcho start api
 ```
 
 The API seeds policy, CRM, and the demo agent during startup. Do not run `data.seed` as a required boot step.
@@ -54,27 +67,29 @@ The API seeds policy, CRM, and the demo agent during startup. Do not run `data.s
 Live hosted-agent runs use the API's MCP endpoint by default:
 
 ```bash
-# default for non-stub API runs
-export REVMEM_TOOL_TRANSPORT=mcp
-
-# optional fallback for local function declarations
-export REVMEM_TOOL_TRANSPORT=function
+REVMEM_TOOL_TRANSPORT=mcp
+# REVMEM_TOOL_TRANSPORT=function  # optional fallback for local function declarations
 ```
 
 The MCP server receives `x-revmem-agent-id` and `x-revmem-session-id` headers from `agent.runner`. It uses the DB-backed agent role and policy tables to filter tool discovery and authorize tool calls; `agent/` does not decide write access.
 
-If port `8000` is already taken, pick another port and keep `REVMEM_BASE_URL` in sync:
+If port `8000` is already taken, pick another port and keep `REVMEM_BASE_URL` in sync in `.env`:
 
 ```bash
-export REVMEM_BASE_URL=http://127.0.0.1:8010
-uv run uvicorn api.main:app --host 127.0.0.1 --port 8010
+REVMEM_BASE_URL=http://127.0.0.1:8010
+REVMEM_PORT=8010
 ```
 
 Approval links are printed by the API server logs. For links that need to work outside the local machine, expose the API and set the public URL before starting both the API process and the CLI:
 
 ```bash
-export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
-uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
+REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+REVMEM_NGROK_URL=https://<your-reserved>.ngrok.app
+REVMEM_PORT=8000
+```
+
+```bash
+honcho start api
 
 # In another terminal:
 ngrok http 8000 --domain=<your-reserved>.ngrok.app
@@ -82,17 +97,18 @@ ngrok http 8000 --domain=<your-reserved>.ngrok.app
 
 ### Honcho Shortcut
 
-The included `Procfile` starts the API and then starts the default live CLI agent after a short delay:
+Honcho loads `.env` by default. For local demos, run the API process and the CLI separately so you can keep approval inboxes visible:
 
 ```bash
-export GEMINI_API_KEY=...
-honcho start
+honcho start api
 ```
 
-Honcho loads `.env` by default, so you can put `GEMINI_API_KEY`, `REVMEM_BASE_URL`, and `REVMEM_STUB_MODE=0` there instead of exporting them. Override `REVMEM_AGENT_START_DELAY` if your API needs more startup time, or set `REVMEM_AGENT_ARGS` for extra CLI flags:
+The full `honcho start` path is for ngrok-backed runs where `.env` also defines `REVMEM_NGROK_URL`; the `agent` Procfile process waits on that URL.
+
+Run one-off commands with `.env` loaded through `honcho run`:
 
 ```bash
-REVMEM_AGENT_ARGS="--session 1 --debug-agent" honcho start
+honcho run uv run python -m cli.run --continuous
 ```
 
 ### Quick Start: `--continuous`
@@ -114,11 +130,13 @@ Each inbox shows pending approval links for that role. The approval form records
 In a second terminal:
 
 ```bash
-export GEMINI_API_KEY=...
-export REVMEM_BASE_URL=http://127.0.0.1:8000
-export REVMEM_STUB_MODE=0
+honcho run uv run python -m cli.run --continuous
+```
 
-uv run python -m cli.run --continuous
+If `REVMEM_STREAM` is not set in `.env`, add `--stream` for the same live SSE visibility:
+
+```bash
+honcho run uv run python -m cli.run --continuous --stream
 ```
 
 #### What Happens
@@ -144,6 +162,7 @@ Step 3: Globex Inc - testing generalization
 Key talking points:
 
 - All three steps share one `environment_id`, giving true Antigravity state continuity.
+- Streaming mode shows each hosted-agent step as it happens: `thought`, `function_call`, and `function_result`.
 - Human correction is real typed input, not hardcoded.
 - The agent decides what to store via `store_memory`.
 - The lesson generalizes from Acme to unseen Globex deal.
@@ -158,13 +177,14 @@ Default feedback if you press Enter:
 `--live` runs the hosted agent through the Rich CLI transcript. It refuses to run if `REVMEM_BASE_URL` is empty unless you explicitly pass `--allow-stub-live`.
 
 ```bash
-uv run python -m cli.run --live                         # default: session 3
-uv run python -m cli.run --live --session 1             # Acme cold-start session
-uv run python -m cli.run --live --session 3             # Globex learned/generalization session
-uv run python -m cli.run --live --all                   # sessions 1 -> 2 -> 3
-uv run python -m cli.run --live --runs 5                # seed, then repeat learned trials
-uv run python -m cli.run --live --fast --no-wait        # local smoke run without approval polling
-uv run python -m cli.run --live --debug-agent           # print Interactions API step debugging
+honcho run uv run python -m cli.run --live                         # default: session 3
+honcho run uv run python -m cli.run --live --session 1             # Acme cold-start session
+honcho run uv run python -m cli.run --live --session 3             # Globex learned/generalization session
+honcho run uv run python -m cli.run --live --all                   # sessions 1 -> 2 -> 3
+honcho run uv run python -m cli.run --live --runs 5                # seed, then repeat learned trials
+honcho run uv run python -m cli.run --live --stream                # live SSE step visibility
+honcho run uv run python -m cli.run --live --fast --no-wait        # local smoke run without approval polling
+honcho run uv run python -m cli.run --live --debug-agent           # print Interactions API step debugging
 ```
 
 Use `--agent-name` to isolate a run. Use `--reuse-agent` when you intentionally want reputation and memories to accumulate on the default demo agent.
@@ -174,13 +194,10 @@ Use `--agent-name` to isolate a run. Use `--reuse-agent` when you intentionally 
 Use `agent.runner` when you want the plain hosted-agent executor without the Rich CLI wrapper:
 
 ```bash
-export GEMINI_API_KEY=...
-export REVMEM_BASE_URL=http://127.0.0.1:8000
-export REVMEM_STUB_MODE=0
-
-uv run python -m agent.runner --session 1
-uv run python -m agent.runner --session 3 --agent-name "RevOps Finance Agent debug"
-uv run python -m agent.demo
+honcho run uv run python -m agent.runner --session 1
+honcho run uv run python -m agent.runner --session 1 --stream
+honcho run uv run python -m agent.runner --session 3 --agent-name "RevOps Finance Agent debug"
+honcho run uv run python -m agent.demo
 ```
 
 `agent.runner` accepts `--env-id` and `--prev-interaction` for manually chaining hosted interactions, plus `--debug` for Interactions API timing and step details.
@@ -207,7 +224,13 @@ uv run python -m pytest -v
 uv run python -m pytest evals/test_grade.py -v
 
 # Full eval harness, generates evals/report.json
-uv run python -m evals.run
+uv run python -m evals.run curve
+
+# Retrieval-quality eval
+uv run python -m evals.run retrieval
+
+# Live learning curve from the .env-selected DB/API
+honcho run uv run python -m evals.run live --source db
 ```
 
 ---

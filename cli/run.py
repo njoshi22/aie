@@ -372,6 +372,9 @@ class RichListener:
         else:
             console.print(render.step("  retrieve_context", "no prior memories - cold start", status="warn"))
 
+    def on_agent_delta(self, text: str) -> None:
+        pass
+
     def on_agent_response(self, text):
         console.print()
         console.print(render.step("Agent analysis complete", status="ok"))
@@ -757,7 +760,10 @@ def main() -> None:
     parser.add_argument("--agent-name", default=None, help="RevMem live agent name to get or create")
     parser.add_argument("--reuse-agent", action="store_true", help="reuse the persisted live demo agent for --all/--runs")
     parser.add_argument("--debug-agent", action="store_true", help="print live Interactions API step debugging")
+    parser.add_argument("--stream", action="store_true", help="stream hosted-agent events live instead of background polling")
     args = parser.parse_args()
+    if args.stream:
+        os.environ["REVMEM_STREAM"] = "1"
     fast = _fast_mode(args.fast)
     wait = _approval_wait_enabled(args.no_wait, fast)
     delay_scale = _resolve_delay_scale(fast=fast)
