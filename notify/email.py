@@ -1,4 +1,4 @@
-"""Compose and send the single CFO approval email (Resend).
+"""Compose and send the approval email (Resend).
 
 One email per session: discrepancy + recommended fix + an Approve magic link
 (-> notify.approve: GET /approvals/{id}?token=...). Falls back to a console
@@ -16,6 +16,17 @@ import os
 from notify.approve import ApprovalRequest
 
 
+def _role_label(role: str) -> str:
+    labels = {
+        "am": "AM",
+        "cfo": "CFO",
+        "cco": "CCO",
+        "cfo_cco": "CFO + CCO",
+        "controller": "Controller",
+    }
+    return labels.get(role, role.replace("_", " + ").upper())
+
+
 def _amount_row(approval: ApprovalRequest) -> str:
     if approval.amount_usd is None:
         return ""
@@ -27,11 +38,12 @@ def _amount_row(approval: ApprovalRequest) -> str:
 
 def render_html(approval: ApprovalRequest) -> str:
     url = approval.approve_url()
+    role = _role_label(approval.approver_role)
     return f"""\
 <div style="font-family:Inter,Arial,sans-serif;background:#F5F3EE;padding:32px;color:#1B2A16">
   <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;padding:32px">
     <h1 style="font-family:Georgia,serif;font-size:22px;margin:0 0 4px">RevMem needs your sign-off</h1>
-    <p style="color:#555;margin:0 0 24px">Deal {approval.deal_id} reconciliation finished. One item needs CFO approval.</p>
+    <p style="color:#555;margin:0 0 24px">Deal {approval.deal_id} reconciliation finished. One item needs {role} approval.</p>
     <table style="width:100%;border-collapse:collapse;font-size:14px;margin:0 0 24px">
       <tr><td style="padding:8px 0;color:#777">Discrepancy</td><td style="padding:8px 0;text-align:right">{approval.discrepancy}</td></tr>
       <tr><td style="padding:8px 0;color:#777">Recommended fix</td><td style="padding:8px 0;text-align:right">{approval.recommended_fix}</td></tr>
@@ -44,9 +56,10 @@ def render_html(approval: ApprovalRequest) -> str:
 
 
 def render_text(approval: ApprovalRequest) -> str:
+    role = _role_label(approval.approver_role)
     lines = [
         "RevMem needs your sign-off.",
-        f"Deal {approval.deal_id} reconciliation finished. One item needs CFO approval.",
+        f"Deal {approval.deal_id} reconciliation finished. One item needs {role} approval.",
         "",
         f"  Discrepancy:     {approval.discrepancy}",
         f"  Recommended fix: {approval.recommended_fix}",

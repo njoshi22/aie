@@ -56,7 +56,7 @@ uv run python -m evals.run
 
 ### 2. Run the CLI demo (scaffold mode, no API key)
 
-The CLI replays a reconciliation session with mock data and drives the CFO approval gate.
+The CLI replays a reconciliation session with mock data and drives the approval gate.
 
 **Terminal 1** — start the approval endpoint:
 ```bash
@@ -71,11 +71,18 @@ uv run python -m cli.run --session s1
 # Session 3 — live approval flow (default)
 uv run python -m cli.run
 
+# Fast noninteractive scaffold check for local integration runs
+uv run python -m cli.run --fast
+uv run python -m cli.run --fast --all
+
 # Skip approval polling (just print the link)
 uv run python -m cli.run --no-wait
 ```
 
-Open the approval link printed in the terminal to approve/reject as the CFO.
+Open the approval link printed in the terminal to approve/reject as the routed approver.
+`--fast` also skips the demo pacing sleeps; `REVMEM_CLI_FAST=1` enables the same
+mode for scripts. Use scaffold mode for quick local integration checks; `--live`
+still calls the hosted agent API, so model/network latency remains.
 
 ### 3. Run the CLI with a real agent (`--live` mode, requires API key)
 
@@ -99,16 +106,44 @@ uv run python -m cli.run --live --session 1
 
 # All 3 sessions (1→2→3) with env-ID threading — the full demo narrative
 uv run python -m cli.run --live --all
+uv run python -m cli.run --live --fast --all
 
-# Repeat N times to show long-term self-improvement
-# Runs sessions 1→2→3 then cycles session 3, reputation accumulates
+# Self-improvement run
+# Seeds once with S1/S2, then runs session 3 ten times on the same agent
 uv run python -m cli.run --live --runs 10
 
 # Skip approval polling
 uv run python -m cli.run --live --no-wait
 ```
 
-`--all` runs the 3-session demo narrative (cold start → learned → generalized) with pauses between sessions. `--runs N` repeats to show improvement over many iterations — at the end, a summary table shows the reputation trajectory across all runs.
+`--all` runs a clean 3-session demo narrative: cold start → learned →
+generalized. It uses a fresh per-run agent by default so old SQLite reputation
+does not pollute the story.
+
+`--runs N` is the stateful self-improvement path. It uses one agent, seeds it
+once with S1/S2, then runs session 3 exactly N times so the counted trials are
+post-learning generalization attempts. Add `--reuse-agent` to continue with the
+persisted demo agent across separate CLI invocations; otherwise each invocation
+gets a fresh agent identity while still remaining stateful within that run.
+
+Live runs print timing markers so you can tell waiting from a hang:
+
+```text
+[->] hosted agent API: initial response
+     waiting for model response...
+[ok] hosted agent API: initial response
+     12.4s
+[ok] retrieve_context completed
+     1.1s
+```
+
+`hosted agent API` is the remote Antigravity/Gemini interaction call. Full live
+sessions prefetch RevMem memories before the first model call, so a second
+`hosted agent API: after tool results` line should only appear if the model still
+chooses to call a tool. `retrieve_context completed` measures RevMem lookup time;
+if `GEMINI_API_KEY` is set on the RevMem API server, that lookup may include an
+embedding API call. Use `--debug-agent` for the lower-level step list when a run
+still looks suspicious.
 
 ### 4. Run the agent via Python runner (raw output, requires API key)
 

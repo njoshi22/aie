@@ -22,9 +22,15 @@ def build_reconciliation_prompt(
             prompt += f"- {mem.get('content', '')}\n"
         prompt += "\nUse these lessons to inform your analysis.\n\n"
 
+    retrieve_instruction = (
+        "1. First, call retrieve_context to check for lessons from past reconciliations.\n"
+        if not memories else
+        "1. Use the relevant lessons already provided; do not call retrieve_context unless the context is missing.\n"
+    )
+
     prompt += (
         "INSTRUCTIONS:\n"
-        "1. First, call retrieve_context to check for lessons from past reconciliations.\n"
+        f"{retrieve_instruction}"
         "2. Compare every pricing field between the contract and CRM record.\n"
         "3. For each field, state whether it matches or not.\n"
         "4. For mismatches, classify as material or immaterial.\n"
@@ -34,8 +40,9 @@ def build_reconciliation_prompt(
 
     if tier == "observer":
         prompt += (
-            "\nYou are in OBSERVER mode. You may only flag and escalate. "
-            "Do NOT attempt to resolve or auto-dismiss anything.\n"
+            "\nYou are in OBSERVER mode. You may not write to CRM. "
+            "Escalate material discrepancies, but classify sub-$1 rounding "
+            "differences as immaterial instead of escalating them.\n"
         )
     elif tier == "analyst":
         prompt += (

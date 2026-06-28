@@ -42,7 +42,7 @@ def test_full_approval_flow(client):
     aid = _make_analyst(client)
     disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
     routed = client.post("/route_for_approval", json=disc).json()
-    assert routed["route_to"] == "cfo" and routed["status"] == "pending"
+    assert routed["route_to"] == "controller" and routed["status"] == "pending"
     assert "token" not in routed and "approval_link" not in routed  # agent must not receive the secret
     approval_id = routed["approval_id"]
     tok = database.get_approval(client.app.state.conn, approval_id).token

@@ -1,4 +1,4 @@
-"""Approval state + the CFO approval endpoints (FastAPI).
+"""Approval state + the human approval endpoints (FastAPI).
 
 This is the **scaffold stand-in for Person B's approval surface**. It exposes the
 exact contract Person B's RevMem API will serve, so the CLI does not change at
@@ -13,7 +13,7 @@ Canonical contract (Person B design — see the Person B plan, Task 8.5):
 
 Security: the GET never mutates. Email gateways, link scanners, and preview bots
 routinely prefetch GET URLs — a GET that approved would let the gate auto-fire
-before the CFO clicks. State only changes on the POST from the confirm button.
+before the approver clicks. State only changes on the POST from the confirm button.
 
 Approval record (maps onto Person B's SQLite ``approvals`` table):
     id, token, deal_id, approver_role, approver_email, discrepancy,
@@ -74,7 +74,7 @@ class ApprovalRequest(BaseModel):
     id: str = Field(default_factory=_id)          # path id (referenced + polled)
     token: str = Field(default_factory=_id)        # secret that guards the decision
     deal_id: str
-    approver_role: str = "cfo"                     # am | controller | cfo | cco
+    approver_role: str = "cfo"                     # am | controller | cfo | cfo_cco
     approver_email: str
     discrepancy: str
     recommended_fix: str
