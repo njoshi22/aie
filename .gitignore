@@ -44,3 +44,6 @@ __pycache__/
 .revmem_approvals.json
 .revmem_approvals.json.lock
 db/
+
+# generated eval report
+evals/report.json
