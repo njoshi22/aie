@@ -525,12 +525,14 @@ def run_live(
     debug: bool = False,
 ) -> dict:
     from agent.runner import run_session
+    # The routed-approval wait is handled after the session so it works in MCP mode,
+    # where the agent's tool calls run server-side and never reach the in-loop listener.
     listener = RichListener(
-        wait_for_approvals=wait,
+        wait_for_approvals=False,
         approval_timeout=approval_timeout,
         approval_interval=approval_interval,
     )
-    return run_session(
+    result = run_session(
         session_number,
         env_id=env_id,
         prev_interaction_id=prev_interaction,
@@ -538,6 +540,10 @@ def run_live(
         agent_name=agent_name,
         debug=debug,
     )
+    _print_tier_transition(result)
+    _show_routed_approvals(result, wait=wait,
+                           approval_timeout=approval_timeout, approval_interval=approval_interval)
+    return result
 
 
 def run_live_all(
@@ -652,6 +658,56 @@ def run_live_repeat(
 
 # --- Continuous mode (one interaction chain with human feedback) ---------------
 
+def _print_tier_transition(result: dict) -> None:
+    """Show the reputation/tier change after a session — the 'earns autonomy' beat."""
+    start_t, end_t = result.get("starting_tier"), result.get("tier")
+    start_r, end_r = result.get("starting_reputation"), result.get("reputation")
+    if start_t != end_t:
+        console.print(render.step(
+            f"Reputation {start_r} → {end_r} · tier {str(start_t).upper()} → {str(end_t).upper()}",
+            "policy widened permissions — no human re-explaining", status="ok"))
+    else:
+        console.print(render.step(f"Reputation {start_r} → {end_r} · tier {str(end_t).upper()}", status="run"))
+
+
+def _show_routed_approvals(result: dict, wait: bool,
+                           approval_timeout: float | None, approval_interval: float | None) -> None:
+    """Show the approval(s) the agent routed this session, optionally blocking for sign-off.
+
+    Transport-agnostic: in MCP mode the runner never sees the agent's server-side tool
+    calls, so the routed approvals are read from the session result (reconstructed there).
+    """
+    from agent import revmem_client
+
+    routed = [a for a in result.get("approvals_routed", []) if a.get("approval_request_id")]
+    if not routed:
+        console.print(render.step("No correction routed for approval this session", status="warn"))
+        return
+    for appr in routed:
+        request_id = str(appr["approval_request_id"])
+        role = str(appr.get("route_to") or "approver")
+        base = revmem_client.REVMEM_BASE_URL
+        inbox = f"{base}/approval-inbox/{role}" if base else "(held in the RevMem server log)"
+        console.print(render.approval_request_panel(role, inbox))
+        if not wait:
+            continue
+        with console.status(f"[yellow]waiting for {role.upper()} approval…[/]", spinner="dots"):
+            try:
+                decided = wait_for_revmem_approval(
+                    request_id,
+                    timeout=_resolve_approval_timeout(approval_timeout),
+                    interval=_resolve_approval_interval(approval_interval),
+                )
+            except TimeoutError:
+                console.print(render.step("Approval timed out", "demo continues unapproved", status="warn"))
+                continue
+        status = str(decided.get("status", ""))
+        if status == "approved":
+            console.print(render.step(f"{role.upper()} approved — correction cleared through the gate", status="ok"))
+        else:
+            console.print(render.step(f"Approval {status}", status="warn"))
+
+
 def run_continuous(
     wait: bool = True,
     approval_timeout: float | None = None,
@@ -659,30 +715,33 @@ def run_continuous(
     agent_name: str = LIVE_AGENT_NAME,
     debug: bool = False,
 ) -> list[dict]:
-    """Run a continuous interaction chain: Acme → human feedback → Globex.
-
-    All interactions share one environment_id. The human types real corrections
-    between deals, and the agent autonomously calls store_memory.
+    """Continuous chain following the demo script: Acme cold start → human
+    correction → Acme again (agent applies the lesson and routes a correction
+    that waits for human approval). All interactions share one environment_id.
     """
     from agent.runner import run_session, send_feedback
 
     console.print()
-    console.print(render.divider("RevMem Continuous Demo — live human correction"))
+    console.print(render.divider("RevMem Continuous Demo — cold start → correction → earned autonomy"))
 
+    # Session 1's routing is shown but not blocked on; session 2 waits for approval.
     listener = RichListener(
-        wait_for_approvals=wait,
+        wait_for_approvals=False,
         approval_timeout=approval_timeout,
         approval_interval=approval_interval,
     )
 
-    # --- Step 1: Run Acme (session 1) — agent has no memories, may make judgment errors
-    console.print(render.divider("Step 1: Acme Corp — no prior memories"))
+    # --- Step 1: Run Acme (session 1) — cold start, observer/read-only, routes through the gate
+    console.print(render.divider("Step 1: Acme Corp — cold start, no memories"))
     result_s1 = run_session(
         session_number=1,
         listener=listener,
         agent_name=agent_name,
         debug=debug,
     )
+    _print_tier_transition(result_s1)
+    _show_routed_approvals(result_s1, wait=False,
+                           approval_timeout=approval_timeout, approval_interval=approval_interval)
 
     env_id = result_s1["environment_id"]
     prev_interaction = result_s1["interaction_id"]
@@ -731,19 +790,25 @@ def run_continuous(
     prev_interaction = feedback_result["interaction_id"]
     env_id = feedback_result["environment_id"]
 
-    # --- Step 3: Run Globex (session 3) — agent should retrieve lesson and generalize
-    console.print(render.divider("Step 3: Globex Inc — testing generalization"))
-    result_s3 = run_session(
-        session_number=3,
+    # --- Step 3: Run Acme again (session 2) — agent retrieves the lesson, catches it on its own
+    console.print(render.divider("Step 3: Acme Corp again — agent applies the lesson"))
+    result_s2 = run_session(
+        session_number=2,
         env_id=env_id,
         prev_interaction_id=prev_interaction,
         listener=listener,
         agent_name=agent_name,
         debug=debug,
     )
+    _print_tier_transition(result_s2)
+
+    # --- Step 4: human approval gate — the agent routed a correction; wait for sign-off
+    console.print(render.divider("Step 4: Human approval gate"))
+    _show_routed_approvals(result_s2, wait=wait,
+                           approval_timeout=approval_timeout, approval_interval=approval_interval)
 
     # --- Summary
-    results = [result_s1, result_s3]
+    results = [result_s1, result_s2]
     console.print()
     console.print(render.run_summary_table(results))
     console.print()
