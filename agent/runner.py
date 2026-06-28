@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from google import genai
 
 from agent.templates.agents_md import AGENTS_MD
@@ -127,6 +130,9 @@ def build_environment(
     }
 
 
+_ENV_FILES: dict[str, str] = {}
+
+
 def _execute_tool(name: str, arguments: dict, agent_id: str, session_id: str) -> dict:
     """Execute a tool call against RevMem and return the result as a dict."""
     if name == "retrieve_context":
@@ -153,8 +159,19 @@ def _execute_tool(name: str, arguments: dict, agent_id: str, session_id: str) ->
         )
         return result
 
-    # Antigravity sandbox has built-in tools (read_file, etc.) — skip unknown ones
-    return {"error": f"Unknown tool: {name}", "note": "Not a RevMem tool"}
+    if name == "read_file":
+        path = arguments.get("path", "")
+        for key, content in _ENV_FILES.items():
+            if path.endswith(key) or key.endswith(path.lstrip("/.")) or path in key:
+                return {"content": content}
+        return {"error": f"File not found: {path}"}
+
+    if name == "list_files":
+        path = arguments.get("path", ".")
+        matches = [k for k in _ENV_FILES if k.startswith(path.rstrip("/")) or path == "."]
+        return {"files": matches}
+
+    return {"error": f"Unknown tool: {name}", "skipped": True}
 
 
 def run_session(
@@ -188,6 +205,10 @@ def run_session(
     tools = get_tools_for_tier(tier)
     environment = build_environment(contract, crm, policy, skill_content, AGENTS_MD)
 
+    _ENV_FILES.clear()
+    for src in environment["sources"]:
+        _ENV_FILES[src["target"]] = src["content"]
+
     create_kwargs = {
         "agent": AGENT_MODEL,
         "input": prompt,
@@ -207,14 +228,19 @@ def run_session(
     tool_calls_made = []
 
     max_tool_rounds = 3
-    for _ in range(max_tool_rounds):
+    for round_num in range(max_tool_rounds):
+        print(f"\n[debug] round {round_num}: interaction.status={interaction.status}", flush=True)
         if interaction.status != "requires_action":
             break
 
-        fc_steps = [
-            s.to_dict() for s in interaction.steps
-            if s.to_dict().get("type") == "function_call"
-        ]
+        all_steps = [s.to_dict() for s in interaction.steps]
+        print(f"[debug] all steps ({len(all_steps)}):", flush=True)
+        for s in all_steps:
+            print(f"  type={s.get('type')}  name={s.get('name', '-')}  id={s.get('id', '-')[:12]}", flush=True)
+
+        resolved_tools = {s.get("name") for s in all_steps if s.get("type") == "function_result"}
+        fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("name") not in resolved_tools]
+        print(f"[debug] fc_steps (unresolved): {[s['name'] for s in fc_steps]} | already resolved: {resolved_tools}", flush=True)
         if not fc_steps:
             break
 
@@ -243,12 +269,15 @@ def run_session(
                 "result": tool_result,
             })
 
+        print(f"[debug] sending {len(results)} results: {[r['name'] for r in results]}", flush=True)
+        print(f"[debug] calling interactions.create with prev_id={interaction.id[:12]}...", flush=True)
         interaction = client.interactions.create(
             agent=AGENT_MODEL,
             previous_interaction_id=interaction.id,
             environment=interaction.environment_id,
             input=results,
         )
+        print(f"[debug] got response: status={interaction.status}", flush=True)
 
     output = interaction.output_text or "(no text output)"
     listener.on_agent_response(output)
@@ -267,6 +296,7 @@ def run_session(
     result = {
         "session_number": session_number,
         "session_id": session_id,
+        "agent_id": agent_id,
         "deal": scenario["deal"],
         "tier": tier,
         "reputation": agent_state["reputation_score"],
