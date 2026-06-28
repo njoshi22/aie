@@ -160,7 +160,7 @@ class Agent(BaseModel):
 
 class PermissionTier:
     OBSERVER = "observer"      # 0.0–0.3: read + flag/escalate only
-    ANALYST = "analyst"        # 0.3–0.6: + auto-resolve immaterial, execute approved corrections
+    ANALYST = "analyst"        # 0.3–0.6: + auto-resolve immaterial, store lessons; no CRM writes
     AUTONOMOUS = "autonomous"  # 0.6–1.0: + auto-reconcile policy-covered fixes; escalate only judgment calls
 ```
 
@@ -173,7 +173,7 @@ class PermissionTier:
 | `get_contract(deal_id)` / `get_crm_record(deal_id)` | Fetch structured order form + CRM record                                                                          | any                                                                                      |
 | `retrieve_context(deal_type, query)`                | Embedding-cosine retrieval of experiential memories + active policy                                               | any                                                                                      |
 | `route_for_approval(discrepancy)`                   | Governance picks approver per policy, **creates a pending Approval**, emits the email link, returns `approval_id` | any                                                                                      |
-| `write_crm(deal_id, fields, approval_id)`           | Reconcile CRM to the signed contract — **server-gated by `authorize_write`**                                      | ANALYST+ **and** an approved record (AUTONOMOUS may self-reconcile policy-covered fixes) |
+| `write_crm(deal_id, fields, approval_id)`           | Reconcile CRM to the signed contract — **server-gated by `authorize_write`**                                      | AUTONOMOUS only; policy-covered fixes may self-reconcile, judgment changes need approval |
 | `log_outcome(session_id, decisions, result)`        | Close session → triggers reputation + relevance updates                                                           | any                                                                                      |
 | `store_memory(...)`                                 | Persist an experiential lesson                                                                                    | **ANALYST+**                                                                             |
 
@@ -185,16 +185,16 @@ The financial control lives in RevMem, not the hosted agent. Flow:
 
 1. `route_for_approval(discrepancy)` → Governance picks the approver per policy, inserts a **pending `Approval`**, returns a tokenized link (email is **stubbed** for the demo — the link is printed into the CLI transcript for the presenter).
 2. The CFO opens the **single served HTML page** (`GET /approvals/{id}?token=…`) and approves/rejects (`POST /approvals/{id}/decision`).
-3. The **agent** polls `GET /approvals/{id}/status` (JSON; cooperative UX only) and then calls `write_crm`. (Person C's CLI polls it too, but only as a scaffold stand-in until Person A's agent is wired — polling is the agent's job, not the view's.)
+3. If the **agent** has `write_crm` in `allowed_tools`, it polls `GET /approvals/{id}/status` (JSON; cooperative UX only) and then calls `write_crm`. Analysts can route and poll but still cannot mutate CRM.
 4. `write_crm` calls `governance.authorize_write(tier, discrepancy, approval_status)` — the **only** thing that can mutate CRM — which returns:
 
 ```
-ALLOW            # AUTONOMOUS + policy-covered change, OR a matching approved record exists
+ALLOW            # AUTONOMOUS + policy-covered change, OR AUTONOMOUS + a matching approved record
 NEEDS_APPROVAL   # material, no approval yet → agent must route_for_approval first
-DENY             # OBSERVER, or rejected, or beyond-authority → escalate, never write
+DENY             # OBSERVER/ANALYST, rejected, or beyond-authority → escalate, never write
 ```
 
-A misbehaving or jailbroken agent still cannot write without a real approved record. `schedule_change` is policy-covered (reconcile CRM to the signed contract); `discount_over_authority` is a judgment change that needs a human even at AUTONOMOUS.
+A misbehaving or jailbroken agent still cannot write without the right tier and, when required, a real approved record. Approval alone does not grant analyst CRM write access. `schedule_change` is policy-covered (reconcile CRM to the signed contract); `discount_over_authority` is a judgment change that needs a human even at AUTONOMOUS.
 
 ---
 
@@ -251,7 +251,7 @@ Retrieves the ramp memory → **ignores the rounding, catches the ramp, escalate
 
 ### Session 3 — LIVE, new Globex contract (rep ~0.5, ANALYST)
 
-Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $360k matches again). The lesson **generalizes** (keyed on `deal_type`, not Acme's numbers). The agent **silently dismisses the immaterial rounding** (an ANALYST capability it lacked as OBSERVER), catches the ramp, escalates it with a recommended correction, and — on **live approval** (presenter clicks Approve on the served approval page) — **executes the CRM write itself** (the new ANALYST permission: OBSERVER could only flag, never touch the CRM).
+Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $360k matches again). The lesson **generalizes** (keyed on `deal_type`, not Acme's numbers). The agent **silently dismisses the immaterial rounding** (an ANALYST capability it lacked as OBSERVER), catches the ramp, and escalates it with a recommended correction. Even after **live approval** (presenter clicks Approve on the served approval page), the ANALYST tier cannot execute the CRM write itself.
 **Live flourish:** edit the governance boundary on stage ($1k → $5k threshold) and re-run to show routing shift in real time.
 **Optional judgment twist:** Globex contract has a 25% discount vs deal-desk max 20% → agent reconciles the ramp **but correctly escalates the over-authority discount** to the CFO.
 **Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.65 → **AUTONOMOUS** (next deal, it could reconcile policy-covered fixes unattended).

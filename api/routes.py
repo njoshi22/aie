@@ -358,6 +358,28 @@ def approval_page(approval_id: str, token: str, request: Request) -> str:
                                  actions=actions)
 
 
+def _seed_approval_lesson(conn: sqlite3.Connection, a: Approval, decision: str) -> None:
+    """Turn an approver's comment into a shared lesson — org-wide context surfaced to
+    every agent via retrieve_context, not memory tied to one agent."""
+    change_type = a.discrepancy.get("change_type", "") if isinstance(a.discrepancy, dict) else ""
+    verb = "approved" if decision == "approve" else "rejected"
+    lesson = (
+        f"Approver feedback on {a.deal_id} ({change_type or 'discrepancy'}) — "
+        f"{verb} by {a.approver_role}: {a.comment}"
+    )
+    database.insert_memory(conn, Memory(
+        session_id=f"approval:{a.request_id}",
+        agent_id=context.SHARED_MEMORY_AGENT_ID,
+        type="approval_feedback",
+        content=lesson,
+        metadata={
+            "source": "approval", "approval_id": a.id, "deal_id": a.deal_id,
+            "decision": decision, "approver_role": a.approver_role,
+        },
+        embedding=context.embed_text(lesson),
+    ))
+
+
 @router.post("/approvals/{approval_id}/decision")
 def approval_decision(approval_id: str, request: Request,
                       decision: str = Form(...), token: str = Form(...),
@@ -401,6 +423,8 @@ def approval_decision(approval_id: str, request: Request,
             a.status = ApprovalStatus.REJECTED
     a.decided_at = datetime.now(timezone.utc)
     database.update_approval(conn, a)
+    if a.comment:
+        _seed_approval_lesson(conn, a, normalized_decision)
     return a.model_dump(mode="json")
 
 

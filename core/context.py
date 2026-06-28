@@ -66,11 +66,18 @@ def score_memory(m: Memory, query_emb: list[float], now: datetime) -> float:
             + GAMMA * _recency(m.created_at, now))
 
 
+# Organization-wide lessons (e.g. approver feedback) are stored under this scope and
+# surfaced to every agent's retrieve, like the policy — they are not tied to one agent.
+SHARED_MEMORY_AGENT_ID = "__shared__"
+
+
 def retrieve(conn: sqlite3.Connection, agent_id: str, query: str,
              memory_type: str | None = None, limit: int = 5,
              now: datetime | None = None) -> list[Memory]:
     now = now or datetime.now(timezone.utc)
     memories = database.list_memories(conn, agent_id, memory_type)
+    if agent_id != SHARED_MEMORY_AGENT_ID:
+        memories += database.list_memories(conn, SHARED_MEMORY_AGENT_ID, memory_type)
     query_emb = embed_text(query)
     ranked = sorted(memories, key=lambda m: score_memory(m, query_emb, now), reverse=True)
     top = ranked[:limit]

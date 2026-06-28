@@ -44,14 +44,18 @@ def test_change_type_override_wins():
 
 def test_tool_gating():
     assert not governance.can_use(PermissionTier.OBSERVER, "write_crm")
-    assert governance.can_use(PermissionTier.ANALYST, "write_crm")
+    assert not governance.can_use(PermissionTier.ANALYST, "write_crm")
+    assert governance.can_use(PermissionTier.AUTONOMOUS, "write_crm")
     assert governance.can_use(PermissionTier.OBSERVER, "retrieve_context")
 
 
 def test_skill_md_grows_with_tier():
     obs = governance.generate_skill_md(PermissionTier.OBSERVER)
+    analyst = governance.generate_skill_md(PermissionTier.ANALYST)
     auto = governance.generate_skill_md(PermissionTier.AUTONOMOUS)
-    assert "write_crm" not in obs and "write_crm" in auto
+    assert "write_crm" not in obs
+    assert "write_crm" not in analyst
+    assert "write_crm" in auto
 
 
 def test_crm_write_schedule_change_requires_controller_method_approval() -> None:

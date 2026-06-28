@@ -115,7 +115,7 @@ honcho run uv run python -m cli.run --continuous
 
 This is the hero mode: one continuous Antigravity interaction chain with live human correction in the middle.
 
-Approval claims in final text are not treated as approval evidence. A compliant run must either call the service-authorized `route_for_approval` tool directly or attempt a governed service method such as `write_crm`; the service returns `approval_required` with an `approval_request_id` before any gated side effect runs.
+Approval claims in final text are not treated as approval evidence. A compliant run must call the service-authorized `route_for_approval` tool when it does not have CRM-write access. Only agents whose `allowed_tools` includes `write_crm` may attempt that governed service method; approval alone does not grant an analyst CRM write access.
 
 For the local demo, human approvers can open unauthenticated inboxes. With the default `REVMEM_BASE_URL=http://127.0.0.1:8000`, use:
 
@@ -336,7 +336,7 @@ flowchart LR
 
 ## Key Concepts
 
-- **Reputation tiers**: OBSERVER (0.0-0.3) -> ANALYST (0.3-0.6) -> AUTONOMOUS (0.6-1.0). The DB-backed agent row stores the current tier; the API returns `allowed_tools` and `/agents/{id}/skill.md`, and live hosted agents call the service-owned MCP endpoint so policy is enforced in the service layer.
+- **Reputation tiers**: OBSERVER (0.0-0.3) -> ANALYST (0.3-0.6) -> AUTONOMOUS (0.6-1.0). ANALYST can route approvals, poll approval status, and store lessons, but cannot mutate CRM; `write_crm` is AUTONOMOUS-only and still approval-gated for judgment changes. The DB-backed agent row stores the current tier; the API returns `allowed_tools` and `/agents/{id}/skill.md`, and live hosted agents call the service-owned MCP endpoint so policy is enforced in the service layer.
 - **Approval gate**: Service-enforced at the route/method level. Each side-effect method has an explicit approval policy defining whether approval is required, whether approvers are `any` or `all`, and whether one approval depends on another. Service methods either execute, return `approval_required` with an `approval_request_id`, or reject the request. The runner only displays and records service results.
 - **Continual learning**: Human feedback -> agent stores lesson via `store_memory` -> future sessions retrieve via `retrieve_context` -> behavior improves.
 - **Continuous interaction chain**: `--continuous` keeps one `environment_id` and chains via `previous_interaction_id`, so the agent's cognitive state evolves within a single Antigravity session.

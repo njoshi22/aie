@@ -38,7 +38,7 @@ def test_fastapi_mounts_service_mcp(tmp_path, monkeypatch) -> None:
 
 def test_mcp_tool_discovery_documents_model_supplied_args(tmp_path) -> None:
     conn = _seeded_conn(tmp_path)
-    agent = _agent(conn, PermissionTier.ANALYST)
+    agent = _agent(conn, PermissionTier.AUTONOMOUS)
     mcp = create_revmem_mcp(lambda: conn, agent_id_provider=lambda: agent.id)
 
     async def run() -> None:
@@ -96,10 +96,9 @@ def test_mcp_tool_discovery_filters_tools_by_agent_reputation(tmp_path) -> None:
         "retrieve_context",
         "route_for_approval",
         "get_approval_status",
-        "write_crm",
         "store_memory",
     }
-    assert autonomous_tools == analyst_tools
+    assert autonomous_tools == analyst_tools | {"write_crm"}
 
 
 def test_mcp_route_for_approval_uses_db_policy_and_agent_identity(tmp_path) -> None:

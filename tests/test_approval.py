@@ -14,8 +14,8 @@ def test_authorize_write_decisions():
     assert governance.authorize_write(PermissionTier.OBSERVER, sched) == WriteDecision.DENY
     # OBSERVER is denied even WITH an approval — the tier check must win over approval status.
     assert governance.authorize_write(PermissionTier.OBSERVER, sched, ApprovalStatus.APPROVED) == WriteDecision.DENY
-    assert governance.authorize_write(PermissionTier.ANALYST, sched) == WriteDecision.NEEDS_APPROVAL
-    assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.APPROVED) == WriteDecision.ALLOW
+    assert governance.authorize_write(PermissionTier.ANALYST, sched) == WriteDecision.DENY
+    assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.APPROVED) == WriteDecision.DENY
     assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.REJECTED) == WriteDecision.DENY
     assert governance.authorize_write(PermissionTier.AUTONOMOUS, sched) == WriteDecision.ALLOW
     assert governance.authorize_write(PermissionTier.AUTONOMOUS, disc) == WriteDecision.NEEDS_APPROVAL
@@ -30,14 +30,24 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
-def _make_analyst(client) -> str:
+def _make_agent(client: TestClient, tier: str) -> str:
     aid = client.post("/agents", json={"name": "A"}).json()["id"]
     conn = client.app.state.conn
     agent = database.get_agent(conn, aid)
     assert agent is not None
-    agent.permission_tier = PermissionTier.ANALYST
+    agent.permission_tier = tier
     database.update_agent(conn, agent)
     return aid
+
+
+def _approve_request(client: TestClient, request_id: str) -> None:
+    approvals = database.list_approvals_for_request(client.app.state.conn, request_id)
+    for approval in approvals:
+        response = client.post(
+            f"/approvals/{approval.id}/decision",
+            data={"decision": "approve", "token": approval.token},
+        )
+        assert response.status_code == 200
 
 
 def test_gate_creates_all_approval_request_with_dependencies(client):
@@ -106,46 +116,51 @@ def test_gate_denies_mismatched_approval_request_context(client):
 
 
 def test_full_approval_flow(client):
-    aid = _make_analyst(client)
-    disc = {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}
+    aid = _make_agent(client, PermissionTier.AUTONOMOUS)
+    disc = {"deal_id": "globex", "amount_usd": 0, "change_type": "discount_over_authority"}
     routed = client.post("/route_for_approval", json={"agent_id": aid, **disc}).json()
-    assert routed["route_to"] == "controller" and routed["status"] == "pending"
+    assert routed["route_to"] == "cfo_cco" and routed["status"] == "pending"
     assert "token" not in routed and "approval_link" not in routed  # agent must not receive the secret
     approval_id = routed["approval_id"]
     approval = database.get_approval(client.app.state.conn, approval_id)
     assert approval is not None
-    tok = approval.token
 
-    body = {"agent_id": aid, "deal_id": "acme",
-            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+    body = {"agent_id": aid, "deal_id": "globex",
+            "fields": {"discount_pct": 30},
             "discrepancy": disc, "approval_request_id": routed["approval_request_id"]}
     pending = client.post("/crm/write", json=body)
     assert pending.status_code == 202
     assert pending.json()["approval_status"] == "pending"
 
-    page = client.get(f"/approvals/{approval_id}", params={"token": tok})
+    page = client.get(f"/approvals/{approval_id}", params={"token": approval.token})
     assert page.status_code == 200 and "Approve" in page.text
-    dec = client.post(f"/approvals/{approval_id}/decision",
-                      data={"decision": "approve", "token": tok})
-    assert dec.json()["status"] == "approved"
+    _approve_request(client, routed["approval_request_id"])
 
     assert client.post("/crm/write", json=body).status_code == 200  # approved → allowed
-    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
+    assert client.get("/crm/globex").json()["discount_pct"] == 30
+
+
+def test_analyst_crm_write_blocked_even_with_approval(client):
+    aid = _make_agent(client, PermissionTier.ANALYST)
+    disc = {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}
+    routed = client.post("/route_for_approval", json={"agent_id": aid, **disc}).json()
+    _approve_request(client, routed["approval_request_id"])
+
+    body = {"agent_id": aid, "deal_id": "acme",
+            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+            "discrepancy": disc, "approval_request_id": routed["approval_request_id"]}
+
+    assert client.post("/crm/write", json=body).status_code == 403
+    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [150000, 150000, 150000]
 
 
 def test_approval_scope_bypass_blocked(client):
-    aid = _make_analyst(client)
-    disc = {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}
+    aid = _make_agent(client, PermissionTier.AUTONOMOUS)
+    disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "discount_over_authority"}
     routed = client.post("/route_for_approval", json={"agent_id": aid, **disc}).json()
-    approval_id = routed["approval_id"]
-    approval = database.get_approval(client.app.state.conn, approval_id)
-    assert approval is not None
-    tok = approval.token
+    _approve_request(client, routed["approval_request_id"])
 
-    # Approve the "acme" approval
-    client.post(f"/approvals/{approval_id}/decision", data={"decision": "approve", "token": tok})
-
-    fields = {"annual_schedule_usd": [100000]}
+    fields = {"discount_pct": 30}
     # Using acme's approval_id to authorize a write to a DIFFERENT deal must be blocked
     body_globex = {"agent_id": aid, "deal_id": "globex", "fields": fields,
                    "discrepancy": disc, "approval_request_id": routed["approval_request_id"]}

@@ -26,12 +26,37 @@ def _make_agent(client, tier: str = PermissionTier.ANALYST) -> str:
     return agent_id
 
 
+def _route_schedule_approval(client: TestClient, agent_id: str | None = None) -> dict[str, object]:
+    actor_id = agent_id or _make_agent(client, PermissionTier.OBSERVER)
+    response = client.post(
+        "/route_for_approval",
+        json={"agent_id": actor_id, "deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _approve_request(client: TestClient, request_id: str) -> None:
+    approvals = database.list_approvals_for_request(client.app.state.conn, request_id)
+    for approval in approvals:
+        response = client.post(
+            f"/approvals/{approval.id}/decision",
+            data={"decision": "approve", "token": approval.token},
+        )
+        assert response.status_code == 200
+
+
 def test_agent_and_skill(client):
     aid = client.post("/agents", json={"name": "A"}).json()["id"]
     assert client.post("/agents", json={"name": "A"}).json()["id"] == aid  # idempotent by name
     got = client.get(f"/agents/{aid}").json()
     assert got["permission_tier"] == "observer"
     assert "write_crm" not in got["allowed_tools"]
+    analyst_id = _make_agent(client, PermissionTier.ANALYST)
+    analyst = client.get(f"/agents/{analyst_id}").json()
+    assert "write_crm" not in analyst["allowed_tools"]
     skill = client.get(f"/agents/{aid}/skill.md").text
     assert "RevOps Finance Agent" in skill
 
@@ -44,6 +69,34 @@ def test_route_for_approval(client):
     r = client.post("/route_for_approval",
                     json={"agent_id": agent_id, "amount_usd": 0, "change_type": "discount_over_authority"})
     assert r.json()["route_to"] == "cfo_cco"
+
+
+def test_approval_comment_seeds_shared_lesson(client):
+    from core import context
+
+    agent_id = _make_agent(client, PermissionTier.OBSERVER)
+    created = client.post(
+        "/route_for_approval",
+        json={"agent_id": agent_id, "deal_id": "globex", "amount_usd": 40000, "change_type": "schedule_change"},
+    ).json()
+    conn = client.app.state.conn
+    token = database.get_approval(conn, created["approval_id"]).token
+
+    resp = client.post(
+        f"/approvals/{created['approval_id']}/decision",
+        data={"decision": "approve", "token": token, "comment": "Always flag the ramp schedule mismatch."},
+    )
+    assert resp.status_code == 200
+
+    # The comment becomes a SHARED lesson (org-wide context), not a memory tied to the acting agent.
+    shared = database.list_memories(conn, context.SHARED_MEMORY_AGENT_ID)
+    assert any("ramp schedule" in m.content for m in shared)
+    assert database.list_memories(conn, agent_id) == []  # acting agent owns no memory from this
+
+    # And it surfaces via retrieve for a *different* agent.
+    other_id = client.post("/agents", json={"name": "Other"}).json()["id"]
+    retrieved = context.retrieve(conn, other_id, "ramp schedule lessons")
+    assert any("ramp schedule" in m.content for m in retrieved)
 
 
 def test_route_for_approval_rejects_unknown_agent(client):
@@ -81,12 +134,12 @@ def test_write_crm_denied_for_observer(client):
 
 
 def test_crm_write_uses_method_approval_request_flow(client):
-    agent_id = _make_agent(client)
+    agent_id = _make_agent(client, PermissionTier.AUTONOMOUS)
     body = {
         "agent_id": agent_id,
-        "deal_id": "acme",
-        "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
-        "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+        "deal_id": "globex",
+        "fields": {"discount_pct": 30},
+        "discrepancy": {"deal_id": "globex", "amount_usd": 0, "change_type": "discount_over_authority"},
     }
 
     pending = client.post("/crm/write", json=body)
@@ -95,33 +148,47 @@ def test_crm_write_uses_method_approval_request_flow(client):
     payload = pending.json()
     assert payload["approval_required"] is True
     assert payload["approval_join"] == "all"
-    assert payload["approvals"][0]["role"] == "controller"
+    assert [approval["role"] for approval in payload["approvals"]] == ["cfo", "cco"]
     assert "token" not in payload
     request_id = payload["approval_request_id"]
     status = client.get(f"/approval-requests/{request_id}/status").json()
     assert status["approval_status"] == "pending"
     assert "token" not in status
 
-    approval_id = payload["approvals"][0]["approval_id"]
-    approval = database.get_approval(client.app.state.conn, approval_id)
-    assert approval is not None
-    decided = client.post(
-        f"/approvals/{approval_id}/decision",
-        data={"decision": "approve", "token": approval.token},
-    )
-    assert decided.json()["status"] == ApprovalStatus.APPROVED
+    _approve_request(client, request_id)
 
     body["approval_request_id"] = request_id
     written = client.post("/crm/write", json=body)
     assert written.status_code == 200
     assert written.json()["approval_request_id"] == request_id
-    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
+    assert client.get("/crm/globex").json()["discount_pct"] == 30
+
+
+def test_crm_write_denied_for_analyst_even_after_approval(client):
+    agent_id = _make_agent(client, PermissionTier.ANALYST)
+    routed = _route_schedule_approval(client, agent_id)
+    request_id = str(routed["approval_request_id"])
+    _approve_request(client, request_id)
+
+    response = client.post(
+        "/crm/write",
+        json={
+            "agent_id": agent_id,
+            "deal_id": "acme",
+            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+            "approval_request_id": request_id,
+        },
+    )
+
+    assert response.status_code == 403
+    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [150000, 150000, 150000]
 
 
 def test_crm_write_uses_db_policy_for_created_approval_role(client):
-    agent_id = _make_agent(client)
+    agent_id = _make_agent(client, PermissionTier.AUTONOMOUS)
     conn = client.app.state.conn
-    rule = database.get_policy(conn, "DOA-003")
+    rule = database.get_policy(conn, "DOA-005")
     assert rule is not None
     rule.route_to = "finance_admin"
     database.upsert_policy(conn, rule)
@@ -130,9 +197,9 @@ def test_crm_write_uses_db_policy_for_created_approval_role(client):
         "/crm/write",
         json={
             "agent_id": agent_id,
-            "deal_id": "acme",
-            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
-            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+            "deal_id": "globex",
+            "fields": {"discount_pct": 30},
+            "discrepancy": {"deal_id": "globex", "amount_usd": 0, "change_type": "discount_over_authority"},
         },
     )
 
@@ -141,17 +208,8 @@ def test_crm_write_uses_db_policy_for_created_approval_role(client):
 
 
 def test_approval_inbox_shows_pending_links_for_role(client):
-    agent_id = _make_agent(client)
-    pending = client.post(
-        "/crm/write",
-        json={
-            "agent_id": agent_id,
-            "deal_id": "acme",
-            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
-            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
-        },
-    )
-    approval_id = pending.json()["approvals"][0]["approval_id"]
+    pending = _route_schedule_approval(client)
+    approval_id = pending["approvals"][0]["approval_id"]
 
     inbox = client.get("/approval-inbox/controller")
 
@@ -161,16 +219,7 @@ def test_approval_inbox_shows_pending_links_for_role(client):
 
 
 def test_approval_decision_persists_comment_and_exposes_it_to_polling_agent(client):
-    agent_id = _make_agent(client)
-    pending = client.post(
-        "/crm/write",
-        json={
-            "agent_id": agent_id,
-            "deal_id": "acme",
-            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
-            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
-        },
-    ).json()
+    pending = _route_schedule_approval(client)
     approval_id = pending["approvals"][0]["approval_id"]
     request_id = pending["approval_request_id"]
     approval = database.get_approval(client.app.state.conn, approval_id)
@@ -191,14 +240,7 @@ def test_approval_decision_persists_comment_and_exposes_it_to_polling_agent(clie
 
 
 def test_trusted_rejection_comment_reroutes_approval_to_mentioned_persona(client):
-    agent_id = _make_agent(client)
-    body = {
-        "agent_id": agent_id,
-        "deal_id": "acme",
-        "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
-        "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
-    }
-    pending = client.post("/crm/write", json=body).json()
+    pending = _route_schedule_approval(client)
     request_id = pending["approval_request_id"]
     controller_id = pending["approvals"][0]["approval_id"]
     controller = database.get_approval(client.app.state.conn, controller_id)
@@ -230,13 +272,11 @@ def test_trusted_rejection_comment_reroutes_approval_to_mentioned_persona(client
         f"/approvals/{cco_approvals[0].id}/decision",
         data={"decision": "approve", "token": cco_approvals[0].token, "comment": "CCO approved."},
     )
-
-    body["approval_request_id"] = request_id
-    assert client.post("/crm/write", json=body).status_code == 200
+    assert client.get(f"/approval-requests/{request_id}/status").json()["approval_status"] == ApprovalStatus.APPROVED
 
 
 def test_dependent_approval_cannot_be_decided_before_parent(client):
-    agent_id = _make_agent(client)
+    agent_id = _make_agent(client, PermissionTier.AUTONOMOUS)
     pending = client.post(
         "/crm/write",
         json={

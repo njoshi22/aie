@@ -107,7 +107,7 @@ Two statefulness layers tell the story: Antigravity's env-ID gives raw continuit
 
 1. **Session 1 (Cold)**: rep 0.1, OBSERVER. No memory yet → over-escalates a $0.33 rounding artifact and misses a material ramp-schedule mismatch (TCV matched, so a naive check passes). Reviewer correction → creates one experiential memory.
 2. **Session 2 (Same contract)**: rep 0.2, OBSERVER. Retrieves the lesson → ignores the noise, catches the ramp, routes it correctly. *Same permission tier* — isolating that the gain is pure context. → rep ~0.5, upgrades to ANALYST.
-3. **Session 3 (New contract, LIVE)**: rep ~0.5, ANALYST. Lesson generalizes; agent silently dismisses the immaterial noise, catches the ramp, and — on live approval — executes the CRM write itself (a permission it lacked as OBSERVER). Live flourish: edit the governance policy on stage and watch routing change in real time. → rep ~0.65, AUTONOMOUS.
+3. **Session 3 (New contract, LIVE)**: rep ~0.5, ANALYST. Lesson generalizes; agent silently dismisses the immaterial noise, catches the ramp, and routes it for approval, but still cannot execute the CRM write itself. Live flourish: edit the governance policy on stage and watch routing change in real time. → rep ~0.65, AUTONOMOUS.
 
 **Key demo moments**:
 - Quality of retrieved context improves between Session 1 and Session 2 (same input, better behavior)
@@ -131,7 +131,7 @@ Two statefulness layers tell the story: Antigravity's env-ID gives raw continuit
 - Dynamic reputation scoring from observed behavior (correct catches, correct routing, no false escalations)
 - **Permission tiers** earned via reputation (what the *agent* may do unsupervised)
 - **Policy-driven approver routing** (the *org's* rules on who approves what) — a governance boundary, kept distinct from reputation
-- **Server-enforced approval gate**: CRM writes pass through `authorize_write`; the untrusted hosted agent cannot mutate the system of record without an approved record
+- **Server-enforced approval gate**: CRM writes pass through `authorize_write`; the untrusted hosted agent cannot mutate the system of record without the `AUTONOMOUS` tier and any required approved record
 - Complete audit trail of memory usage and decisions
 
 ---

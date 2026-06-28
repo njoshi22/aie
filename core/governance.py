@@ -8,7 +8,7 @@ _BASE_TOOLS = {"get_contract", "get_crm_record", "retrieve_context",
                "route_for_approval", "log_outcome"}
 TOOLS_BY_TIER: dict[str, set[str]] = {
     PermissionTier.OBSERVER: set(_BASE_TOOLS),
-    PermissionTier.ANALYST: _BASE_TOOLS | {"get_approval_status", "write_crm", "store_memory"},
+    PermissionTier.ANALYST: _BASE_TOOLS | {"get_approval_status", "store_memory"},
     PermissionTier.AUTONOMOUS: _BASE_TOOLS | {"get_approval_status", "write_crm", "store_memory"},
 }
 
@@ -61,7 +61,7 @@ JUDGMENT_CHANGE_TYPES = {"discount_over_authority"}
 
 
 def authorize_write(tier: str, discrepancy: dict[str, Any], approval_status: str | None = None) -> str:
-    if tier == PermissionTier.OBSERVER:
+    if tier in {PermissionTier.OBSERVER, PermissionTier.ANALYST}:
         return WriteDecision.DENY
     if approval_status == ApprovalStatus.APPROVED:
         return WriteDecision.ALLOW
@@ -83,7 +83,7 @@ def generate_skill_md(tier: str) -> str:
                   "CRM — route every discrepancy for approval."]
     elif tier == PermissionTier.ANALYST:
         lines += ["", "You are ANALYST: silently dismiss immaterial diffs; escalate "
-                  "material ones; on approval you may `write_crm`."]
+                  "material ones; you may not write to CRM."]
     else:
         lines += ["", "You are AUTONOMOUS: reconcile policy-covered fixes directly; "
                   "escalate only genuine judgment calls."]
