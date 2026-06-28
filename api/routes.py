@@ -227,7 +227,8 @@ def retrieve_memory(agent_id: str, query: str, request: Request,
 @router.post("/route_for_approval")
 def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
     conn = _conn(request)
-    approver = governance.route(body.model_dump(), database.list_policy(conn))
+    policy_rules = database.list_policy(conn)
+    approver = governance.route(body.model_dump(), policy_rules)
     gate = ensure_method_approved(
         conn,
         "crm.write",
@@ -236,6 +237,7 @@ def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
             "deal_id": body.deal_id,
             "discrepancy": body.model_dump(),
         },
+        policy_rules=policy_rules,
     )
     payload = dict(gate.payload)
     payload["route_to"] = approver

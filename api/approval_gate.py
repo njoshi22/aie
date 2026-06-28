@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from core import approval_policy, database
-from core.models import Approval, ApprovalStatus
+from core.models import Approval, ApprovalStatus, PolicyRule
 
 
 @dataclass(frozen=True)
@@ -137,8 +137,12 @@ def ensure_method_approved(
     method: str,
     context: Mapping[str, Any],
     request_id: str | None = None,
+    policy_rules: Sequence[PolicyRule] | None = None,
 ) -> ApprovalGateResult:
-    plan = approval_policy.approval_plan_for_method(method, context)
+    active_policy_rules = policy_rules
+    if active_policy_rules is None and method == "crm.write":
+        active_policy_rules = database.list_policy(conn)
+    plan = approval_policy.approval_plan_for_method(method, context, active_policy_rules)
     if not plan.allowed:
         return ApprovalGateResult(False, _denied_payload(plan.reason))
     if not plan.required:

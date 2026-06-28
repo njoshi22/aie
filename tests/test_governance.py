@@ -1,3 +1,5 @@
+import pytest
+
 from core import governance
 from core.approval_policy import (
     ApprovalJoin,
@@ -63,6 +65,7 @@ def test_crm_write_schedule_change_requires_controller_method_approval() -> None
                 "change_type": "schedule_change",
             },
         },
+        RULES,
     )
 
     assert plan.required is True
@@ -83,6 +86,7 @@ def test_crm_write_discount_requires_dependent_cfo_then_cco_approvals() -> None:
                 "change_type": "discount_over_authority",
             },
         },
+        RULES,
     )
 
     assert plan.required is True
@@ -120,11 +124,27 @@ def test_observer_crm_write_is_denied_by_method_policy() -> None:
                 "change_type": "schedule_change",
             },
         },
+        RULES,
     )
 
     assert plan.allowed is False
     assert plan.required is False
     assert plan.steps == ()
+
+
+def test_crm_write_method_policy_requires_policy_rules() -> None:
+    with pytest.raises(ValueError, match="policy rules"):
+        approval_plan_for_method(
+            "crm.write",
+            {
+                "tier": "analyst",
+                "discrepancy": {
+                    "deal_id": "globex",
+                    "amount_usd": 40000,
+                    "change_type": "schedule_change",
+                },
+            },
+        )
 
 
 def test_approval_join_and_dependencies_are_evaluated() -> None:

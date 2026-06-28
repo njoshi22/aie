@@ -4,7 +4,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from core.models import ApprovalStatus, PermissionTier
+from core import governance
+from core.models import ApprovalStatus, PermissionTier, PolicyRule
 
 
 class ApprovalJoin:
@@ -40,7 +41,29 @@ NO_APPROVAL_METHODS = {
 }
 
 
-def _crm_write_plan(context: Mapping[str, Any]) -> MethodApprovalPlan:
+def _approval_steps_for_route(route_to: str | None) -> tuple[ApprovalStep, ...]:
+    route = (route_to or "").strip()
+    if not route or route == "none":
+        return ()
+    if route == "cfo_cco":
+        return (
+            ApprovalStep("cfo", "cfo"),
+            ApprovalStep("cco", "cco", depends_on=("cfo",)),
+        )
+    return (ApprovalStep(route, route),)
+
+
+def _route_for_discrepancy(
+    discrepancy: Mapping[str, Any],
+    policy_rules: Sequence[PolicyRule],
+) -> str:
+    return governance.route(dict(discrepancy), list(policy_rules))
+
+
+def _crm_write_plan(
+    context: Mapping[str, Any],
+    policy_rules: Sequence[PolicyRule] | None = None,
+) -> MethodApprovalPlan:
     tier = str(context.get("tier", ""))
     discrepancy = context.get("discrepancy", {})
     change_type = discrepancy.get("change_type") if isinstance(discrepancy, Mapping) else None
@@ -54,23 +77,20 @@ def _crm_write_plan(context: Mapping[str, Any]) -> MethodApprovalPlan:
         )
     if tier == PermissionTier.AUTONOMOUS and change_type != "discount_over_authority":
         return MethodApprovalPlan("crm.write", required=False, reason="policy-covered autonomous write")
-    if change_type == "discount_over_authority":
-        return MethodApprovalPlan(
-            "crm.write",
-            required=True,
-            join=ApprovalJoin.ALL,
-            steps=(
-                ApprovalStep("cfo", "cfo"),
-                ApprovalStep("cco", "cco", depends_on=("cfo",)),
-            ),
-            reason="discount over authority requires CFO then CCO approval",
-        )
+    if not isinstance(discrepancy, Mapping):
+        discrepancy = {}
+    if policy_rules is None:
+        raise ValueError("crm.write approval plan requires policy rules")
+    route_to = _route_for_discrepancy(discrepancy, policy_rules)
+    steps = _approval_steps_for_route(route_to)
+    if not steps:
+        return MethodApprovalPlan("crm.write", required=False, reason="policy route requires no approval")
     return MethodApprovalPlan(
         "crm.write",
         required=True,
         join=ApprovalJoin.ALL,
-        steps=(ApprovalStep("controller", "controller"),),
-        reason="material CRM write requires controller approval",
+        steps=steps,
+        reason=f"crm.write requires {route_to} approval",
     )
 
 
@@ -87,11 +107,15 @@ def _policy_update_plan(context: Mapping[str, Any]) -> MethodApprovalPlan:
     )
 
 
-def approval_plan_for_method(method: str, context: Mapping[str, Any]) -> MethodApprovalPlan:
+def approval_plan_for_method(
+    method: str,
+    context: Mapping[str, Any],
+    policy_rules: Sequence[PolicyRule] | None = None,
+) -> MethodApprovalPlan:
     if method in NO_APPROVAL_METHODS:
         return MethodApprovalPlan(method, required=False, reason="method does not require approval")
     if method == "crm.write":
-        return _crm_write_plan(context)
+        return _crm_write_plan(context, policy_rules)
     if method == "policy.update":
         return _policy_update_plan(context)
     raise KeyError(f"no approval policy registered for method {method}")

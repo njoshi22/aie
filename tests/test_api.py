@@ -45,6 +45,22 @@ def test_route_for_approval(client):
     assert r.json()["route_to"] == "cfo_cco"
 
 
+def test_route_for_approval_uses_db_policy_for_created_approval_role(client):
+    conn = client.app.state.conn
+    rule = database.get_policy(conn, "DOA-003")
+    assert rule is not None
+    rule.route_to = "finance_admin"
+    database.upsert_policy(conn, rule)
+
+    routed = client.post(
+        "/route_for_approval",
+        json={"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+    ).json()
+
+    assert routed["route_to"] == "finance_admin"
+    assert [approval["role"] for approval in routed["approvals"]] == ["finance_admin"]
+
+
 def test_write_crm_denied_for_observer(client):
     aid = client.post("/agents", json={"name": "A"}).json()["id"]
     r = client.post("/crm/write",
@@ -89,6 +105,28 @@ def test_crm_write_uses_method_approval_request_flow(client):
     assert written.status_code == 200
     assert written.json()["approval_request_id"] == request_id
     assert client.get("/crm/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
+
+
+def test_crm_write_uses_db_policy_for_created_approval_role(client):
+    agent_id = _make_agent(client)
+    conn = client.app.state.conn
+    rule = database.get_policy(conn, "DOA-003")
+    assert rule is not None
+    rule.route_to = "finance_admin"
+    database.upsert_policy(conn, rule)
+
+    pending = client.post(
+        "/crm/write",
+        json={
+            "agent_id": agent_id,
+            "deal_id": "acme",
+            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+        },
+    )
+
+    assert pending.status_code == 202
+    assert [approval["role"] for approval in pending.json()["approvals"]] == ["finance_admin"]
 
 
 def test_approval_inbox_shows_pending_links_for_role(client):
