@@ -68,6 +68,21 @@ uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
 ngrok http 8000 --domain=<your-reserved>.ngrok.app
 ```
 
+### Honcho Shortcut
+
+The included `Procfile` starts the API and then starts the default live CLI agent after a short delay:
+
+```bash
+export GEMINI_API_KEY=...
+honcho start
+```
+
+Honcho loads `.env` by default, so you can put `GEMINI_API_KEY`, `REVMEM_BASE_URL`, and `REVMEM_STUB_MODE=0` there instead of exporting them. Override `REVMEM_AGENT_START_DELAY` if your API needs more startup time, or set `REVMEM_AGENT_ARGS` for extra CLI flags:
+
+```bash
+REVMEM_AGENT_ARGS="--session 1 --debug-agent" honcho start
+```
+
 ### Quick Start: `--continuous`
 
 This is the hero mode: one continuous Antigravity interaction chain with live human correction in the middle.
@@ -175,6 +190,42 @@ uv run python -m evals.run
 ---
 
 ## Project Structure
+
+The runtime wiring is:
+
+```mermaid
+flowchart LR
+    Operator["Demo operator / reviewer"]
+    CLI["cli.run<br/>Rich demo wrapper"]
+    Scaffold["Offline scaffold<br/>mock scenarios"]
+    Runner["agent.runner / agent.demo<br/>hosted-agent executor"]
+    Gemini["Gemini / Antigravity<br/>Interactions API"]
+    Client["agent.revmem_client<br/>HTTP boundary"]
+    API["api.main<br/>FastAPI governance service"]
+    Core["core<br/>memory, reputation, policy, sessions"]
+    DB[("SQLite<br/>db/revmem.db or REVMEM_DB")]
+    Data["data<br/>contracts, Salesforce, policy seeds"]
+    AgentConfig[".agents + agent/templates<br/>persona and reconciliation skill"]
+    Approver["Human approver<br/>approval page from API logs"]
+    Evals["evals<br/>gold labels and grading"]
+
+    Operator --> CLI
+    CLI -->|"offline mode"| Scaffold
+    CLI -->|"live / continuous modes"| Runner
+    Operator -->|"plain runner path"| Runner
+    AgentConfig -->|"workspace instructions"| Runner
+    Runner -->|"create interactions"| Gemini
+    Gemini -->|"function/tool calls"| Runner
+    Runner -->|"tool execution"| Client
+    Client -->|"REST"| API
+    API --> Core
+    Core --> DB
+    Data -->|"startup seed + contract fixtures"| API
+    API -->|"approval links printed to logs"| Approver
+    Approver -->|"approve / reject"| API
+    Runner -->|"agent output + decisions"| Evals
+    Runner -->|"session outcome"| API
+```
 
 ```text
 ├── .agents/                         # Antigravity agent config

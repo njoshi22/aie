@@ -1,0 +1,2 @@
+api: sh -c 'export REVMEM_BASE_URL="${REVMEM_BASE_URL:-http://127.0.0.1:8000}"; export REVMEM_STUB_MODE="${REVMEM_STUB_MODE:-0}"; uv run uvicorn api.main:app --host 127.0.0.1 --port 8000'
+agent: sh -c 'sleep "${REVMEM_AGENT_START_DELAY:-2}"; export REVMEM_BASE_URL="${REVMEM_BASE_URL:-http://127.0.0.1:8000}"; export REVMEM_STUB_MODE="${REVMEM_STUB_MODE:-0}"; uv run python -m cli.run --live ${REVMEM_AGENT_ARGS:-}'
