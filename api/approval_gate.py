@@ -64,6 +64,7 @@ def approval_request_payload(approvals: list[Approval], reason: str) -> dict[str
                 "step_id": approval.step_id,
                 "role": approval.approver_role,
                 "status": approval.status,
+                "comment": approval.comment,
                 "depends_on": approval.depends_on,
             }
             for approval in approvals

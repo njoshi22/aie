@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -19,6 +20,9 @@ from core.models import Agent, Approval, ApprovalStatus, Memory, MemoryType, Per
 from data import seed
 
 router = APIRouter()
+
+TRUSTED_REROUTE_ROLES = {"controller", "cfo", "finance_admin"}
+REROUTE_TARGET_ROLES = {"am", "controller", "cfo", "cco", "finance_admin"}
 
 
 def _conn(request: Request) -> sqlite3.Connection:
@@ -101,6 +105,27 @@ def _blocked_approval_response(
         return payload
     reason = str(payload.get("reason", "approval request is not satisfied"))
     raise HTTPException(status.HTTP_403_FORBIDDEN, reason)
+
+
+def _role_label(role: str) -> str:
+    labels = {"am": "AM", "cco": "CCO", "cfo": "CFO"}
+    return labels.get(role, role.replace("_", " ").title())
+
+
+def _approval_link(approval: Approval) -> str:
+    base = os.getenv("REVMEM_BASE_URL", "")
+    return f"{base}/approvals/{approval.id}?token={approval.token}"
+
+
+def _reroute_target(comment: str, current_role: str) -> str | None:
+    normalized_current = current_role.lower()
+    for role in sorted(REROUTE_TARGET_ROLES, key=len, reverse=True):
+        if role == normalized_current:
+            continue
+        pattern = rf"\b{re.escape(role.replace('_', ' '))}\b"
+        if re.search(pattern, comment, flags=re.IGNORECASE):
+            return role
+    return None
 
 
 @router.post("/agents")
@@ -215,15 +240,13 @@ def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
     payload = dict(gate.payload)
     payload["route_to"] = approver
     payload["status"] = payload.get("approval_status", ApprovalStatus.PENDING)
-    base = os.getenv("REVMEM_BASE_URL", "")
     for approval_ref in payload.get("approvals", []):
         if not isinstance(approval_ref, dict):
             continue
         approval = database.get_approval(conn, str(approval_ref.get("approval_id", "")))
         if approval is None:
             continue
-        link = f"{base}/approvals/{approval.id}?token={approval.token}"
-        print(f"[approval] route to {approval.approver_role}: {link}")  # email is stubbed for the demo
+        print(f"[approval] route to {approval.approver_role}: {_approval_link(approval)}")  # email is stubbed for the demo
     # Token intentionally NOT returned to the agent — the agent polls /approval-requests/{id}/status
     # (token-less); the human approver receives the link+token via the stubbed email (stdout).
     return payload
@@ -262,12 +285,41 @@ def write_crm(body: CrmWrite, request: Request, response: Response) -> dict[str,
     return {**gate.payload, "crm": record}
 
 
+@router.get("/approval-inbox/{role}", response_class=HTMLResponse)
+def approval_inbox(role: str, request: Request) -> str:
+    role_key = role.lower()
+    approvals = database.list_pending_approvals_for_role(_conn(request), role_key)
+    title = f"{_role_label(role_key)} Approval Inbox"
+    links = "\n".join(
+        (
+            "<li>"
+            f'<a href="{html.escape(_approval_link(approval), quote=True)}">'
+            f"{html.escape(approval.deal_id)} - {html.escape(approval.method)}"
+            "</a>"
+            "</li>"
+        )
+        for approval in approvals
+    )
+    if not links:
+        links = "<li>No pending approvals.</li>"
+    return (
+        "<!doctype html><html><head>"
+        f"<title>{html.escape(title)}</title>"
+        "</head><body style=\"font-family:system-ui;max-width:42rem;margin:4rem auto\">"
+        f"<h1>{html.escape(title)}</h1>"
+        "<p>Unauthenticated local demo inbox.</p>"
+        f"<ul>{links}</ul>"
+        "</body></html>"
+    )
+
+
 _APPROVAL_HTML = """<!doctype html><html><head><title>RevMem Approval</title></head>
 <body style="font-family:system-ui;max-width:34rem;margin:4rem auto">
 <h2>Pricing reconciliation approval</h2>
 <p><b>Deal:</b> {deal_id} &nbsp; <b>Routed to:</b> {approver_role}</p>
 <pre>{discrepancy}</pre>
 <p><b>Status:</b> {status}</p>
+<p><b>Comment:</b> {comment}</p>
 {actions}
 </body></html>"""
 
@@ -281,33 +333,62 @@ def approval_page(approval_id: str, token: str, request: Request) -> str:
         safe_id = html.escape(a.id)
         safe_token = html.escape(a.token)
         actions = (f'<form method="post" action="/approvals/{safe_id}/decision">'
-                   f'<input type="hidden" name="token" value="{safe_token}">'
-                   f'<button name="decision" value="approve">Approve</button> '
-                   f'<button name="decision" value="reject">Reject</button></form>')
+                    f'<input type="hidden" name="token" value="{safe_token}">'
+                   '<p><label>Comment<br><textarea name="comment" rows="4" '
+                   'style="width:100%"></textarea></label></p>'
+                    f'<button name="decision" value="approve">Approve</button> '
+                   f'<button name="decision" value="deny">Deny</button></form>')
     else:
         actions = "<p><i>Decision recorded.</i></p>"
     return _APPROVAL_HTML.format(deal_id=html.escape(a.deal_id),
                                  approver_role=html.escape(a.approver_role),
                                  discrepancy=html.escape(json.dumps(a.discrepancy, indent=2)),
-                                 status=html.escape(a.status), actions=actions)
+                                 status=html.escape(a.status),
+                                 comment=html.escape(a.comment),
+                                 actions=actions)
 
 
 @router.post("/approvals/{approval_id}/decision")
 def approval_decision(approval_id: str, request: Request,
-                      decision: str = Form(...), token: str = Form(...)) -> dict[str, Any]:
+                      decision: str = Form(...), token: str = Form(...),
+                      comment: str = Form("")) -> dict[str, Any]:
     conn = _conn(request)
     a = database.get_approval(conn, approval_id)
     if not a or a.token != token:
         raise HTTPException(404, "unknown approval")
     if a.status != ApprovalStatus.PENDING:
         return a.model_dump(mode="json")
-    if decision not in {"approve", "reject"}:
-        raise HTTPException(400, "decision must be approve or reject")
-    if decision == "approve":
+    normalized_decision = "reject" if decision == "deny" else decision
+    if normalized_decision not in {"approve", "reject"}:
+        raise HTTPException(400, "decision must be approve or deny")
+    a.comment = comment.strip()
+    if normalized_decision == "approve":
         approvals = database.list_approvals_for_request(conn, a.request_id)
         if not approval_policy.dependencies_satisfied(a.step_id, _approval_rows(approvals)):
             raise HTTPException(409, f"approval {a.step_id} has unsatisfied dependencies")
-    a.status = ApprovalStatus.APPROVED if decision == "approve" else ApprovalStatus.REJECTED
+        a.status = ApprovalStatus.APPROVED
+    else:
+        target_role = None
+        if a.approver_role in TRUSTED_REROUTE_ROLES:
+            target_role = _reroute_target(a.comment, a.approver_role)
+        if target_role:
+            siblings = database.list_approvals_for_request(conn, a.request_id)
+            if not any(approval.approver_role == target_role for approval in siblings):
+                database.insert_approval(
+                    conn,
+                    Approval(
+                        request_id=a.request_id,
+                        method=a.method,
+                        join=a.join,
+                        step_id=target_role,
+                        deal_id=a.deal_id,
+                        discrepancy=a.discrepancy,
+                        approver_role=target_role,
+                    ),
+                )
+            a.status = ApprovalStatus.REROUTED
+        else:
+            a.status = ApprovalStatus.REJECTED
     a.decided_at = datetime.now(timezone.utc)
     database.update_approval(conn, a)
     return a.model_dump(mode="json")

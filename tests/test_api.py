@@ -91,6 +91,101 @@ def test_crm_write_uses_method_approval_request_flow(client):
     assert client.get("/crm/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
 
 
+def test_approval_inbox_shows_pending_links_for_role(client):
+    agent_id = _make_agent(client)
+    pending = client.post(
+        "/crm/write",
+        json={
+            "agent_id": agent_id,
+            "deal_id": "acme",
+            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+        },
+    )
+    approval_id = pending.json()["approvals"][0]["approval_id"]
+
+    inbox = client.get("/approval-inbox/controller")
+
+    assert inbox.status_code == 200
+    assert "Controller Approval Inbox" in inbox.text
+    assert f"/approvals/{approval_id}?token=" in inbox.text
+
+
+def test_approval_decision_persists_comment_and_exposes_it_to_polling_agent(client):
+    agent_id = _make_agent(client)
+    pending = client.post(
+        "/crm/write",
+        json={
+            "agent_id": agent_id,
+            "deal_id": "acme",
+            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+            "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+        },
+    ).json()
+    approval_id = pending["approvals"][0]["approval_id"]
+    request_id = pending["approval_request_id"]
+    approval = database.get_approval(client.app.state.conn, approval_id)
+    assert approval is not None
+
+    decided = client.post(
+        f"/approvals/{approval_id}/decision",
+        data={
+            "decision": "approve",
+            "token": approval.token,
+            "comment": "Approved. Use the signed ramp schedule exactly.",
+        },
+    )
+    status = client.get(f"/approval-requests/{request_id}/status").json()
+
+    assert decided.json()["comment"] == "Approved. Use the signed ramp schedule exactly."
+    assert status["approvals"][0]["comment"] == "Approved. Use the signed ramp schedule exactly."
+
+
+def test_trusted_rejection_comment_reroutes_approval_to_mentioned_persona(client):
+    agent_id = _make_agent(client)
+    body = {
+        "agent_id": agent_id,
+        "deal_id": "acme",
+        "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
+        "discrepancy": {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"},
+    }
+    pending = client.post("/crm/write", json=body).json()
+    request_id = pending["approval_request_id"]
+    controller_id = pending["approvals"][0]["approval_id"]
+    controller = database.get_approval(client.app.state.conn, controller_id)
+    assert controller is not None
+
+    rerouted = client.post(
+        f"/approvals/{controller_id}/decision",
+        data={
+            "decision": "deny",
+            "token": controller.token,
+            "comment": "Reach out to the CCO for this exception.",
+        },
+    )
+    status = client.get(f"/approval-requests/{request_id}/status").json()
+    cco_approvals = [
+        approval for approval in database.list_approvals_for_request(client.app.state.conn, request_id)
+        if approval.approver_role == "cco"
+    ]
+
+    assert rerouted.json()["status"] == ApprovalStatus.REROUTED
+    assert rerouted.json()["comment"] == "Reach out to the CCO for this exception."
+    assert status["approval_status"] == ApprovalStatus.PENDING
+    assert status["approvals"][0]["status"] == ApprovalStatus.REROUTED
+    assert status["approvals"][0]["comment"] == "Reach out to the CCO for this exception."
+    assert len(cco_approvals) == 1
+    assert client.get("/approval-inbox/cco").text.count(f"/approvals/{cco_approvals[0].id}?token=") == 1
+
+    client.post(
+        f"/approvals/{cco_approvals[0].id}/decision",
+        data={"decision": "approve", "token": cco_approvals[0].token, "comment": "CCO approved."},
+    )
+
+    body["approval_request_id"] = request_id
+    assert client.post("/crm/write", json=body).status_code == 200
+
+
 def test_dependent_approval_cannot_be_decided_before_parent(client):
     agent_id = _make_agent(client)
     pending = client.post(

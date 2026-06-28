@@ -357,7 +357,6 @@ def run_session(
     session_number: int,
     env_id: str | None = None,
     prev_interaction_id: str | None = None,
-    stream: bool = True,
     listener: RunnerListener | None = None,
     agent_name: str = AGENT_NAME,
     debug: bool = False,
@@ -430,9 +429,9 @@ def run_session(
         for s in all_steps:
             _debug(debug, f"  type={s.get('type')}  name={s.get('name', '-')}  id={s.get('id', '-')[:12]}")
 
-        resolved_tools = {s.get("name") for s in all_steps if s.get("type") == "function_result"}
-        fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("name") not in resolved_tools]
-        _debug(debug, f"[debug] fc_steps (unresolved): {[s['name'] for s in fc_steps]} | already resolved: {resolved_tools}")
+        resolved_call_ids = {s.get("call_id") for s in all_steps if s.get("type") == "function_result"}
+        fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("id") not in resolved_call_ids]
+        _debug(debug, f"[debug] fc_steps (unresolved): {[s['name'] for s in fc_steps]} | already resolved call_ids: {resolved_call_ids}")
         if not fc_steps:
             break
 
@@ -599,8 +598,8 @@ def send_feedback(
             break
 
         all_steps = [s.to_dict() for s in interaction.steps]
-        resolved_tools = {s.get("name") for s in all_steps if s.get("type") == "function_result"}
-        fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("name") not in resolved_tools]
+        resolved_call_ids = {s.get("call_id") for s in all_steps if s.get("type") == "function_result"}
+        fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("id") not in resolved_call_ids]
         if not fc_steps:
             break
 
@@ -650,7 +649,6 @@ def main():
     parser.add_argument("--session", type=int, required=True, choices=[1, 2, 3])
     parser.add_argument("--env-id", type=str, default=None)
     parser.add_argument("--prev-interaction", type=str, default=None)
-    parser.add_argument("--no-stream", action="store_true", help="Disable streaming output")
     parser.add_argument("--agent-name", default=AGENT_NAME, help="RevMem agent name to get or create")
     parser.add_argument("--debug", action="store_true", help="Print Interactions API step debugging")
     args = parser.parse_args()
@@ -659,7 +657,6 @@ def main():
         args.session,
         args.env_id,
         args.prev_interaction,
-        stream=not args.no_stream,
         agent_name=args.agent_name,
         debug=args.debug,
     )

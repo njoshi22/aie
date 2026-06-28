@@ -98,7 +98,11 @@ def approval_plan_for_method(method: str, context: Mapping[str, Any]) -> MethodA
 
 
 def approval_request_satisfied(join: str, approvals: Sequence[Mapping[str, object]]) -> bool:
-    statuses = [approval.get("status") for approval in approvals]
+    statuses = [
+        approval.get("status")
+        for approval in approvals
+        if approval.get("status") != ApprovalStatus.REROUTED
+    ]
     if not statuses:
         return False
     if join == ApprovalJoin.ANY:

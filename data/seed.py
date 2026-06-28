@@ -20,6 +20,8 @@ def load_contract(deal_id: str) -> dict[str, Any] | None:
 
 
 def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent") -> Agent:
+    conn.execute("DELETE FROM approvals")
+    conn.commit()
     # policy (replace existing so re-seed is idempotent)
     conn.execute("DELETE FROM policy_rules")
     raw_policy = _load("policy.json")

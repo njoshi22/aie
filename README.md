@@ -89,6 +89,8 @@ This is the hero mode: one continuous Antigravity interaction chain with live hu
 
 Approval claims in final text are not treated as approval evidence. A compliant run must either call `route_for_approval` directly or attempt a governed service method such as `write_crm`; the service returns `approval_required` with an `approval_request_id` before any gated side effect runs.
 
+For the local demo, human approvers can open unauthenticated inboxes such as `/approval-inbox/controller`, `/approval-inbox/cfo`, or `/approval-inbox/cco`. Each inbox shows pending approval links for that role. The approval form records approve/deny decisions plus comments; trusted reroute comments that mention another known persona can create the next approval task.
+
 In a second terminal:
 
 ```bash

@@ -9,8 +9,7 @@ from agent.scenarios import SCENARIOS
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--no-stream", action="store_true")
-    args = parser.parse_args()
+    parser.parse_args()
 
     print("\n" + "=" * 60)
     print("  RevMem Demo — Contract Reconciliation")
@@ -34,7 +33,6 @@ def main():
 
         result = run_session(
             session_num, env_id, prev_interaction,
-            stream=not args.no_stream,
         )
         results.append(result)
 

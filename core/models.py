@@ -79,6 +79,7 @@ class ApprovalStatus:
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    REROUTED = "rerouted"
 
 
 class Approval(BaseModel):
@@ -92,6 +93,7 @@ class Approval(BaseModel):
     discrepancy: dict[str, Any]
     approver_role: str
     status: str = ApprovalStatus.PENDING
+    comment: str = ""
     token: str = Field(default_factory=_uuid)
     created_at: datetime = Field(default_factory=_now)
     decided_at: datetime | None = None

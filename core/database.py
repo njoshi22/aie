@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY, request_id TEXT NOT NULL, method TEXT NOT NULL,
   join_mode TEXT NOT NULL, step_id TEXT NOT NULL, depends_on TEXT NOT NULL,
   deal_id TEXT, discrepancy TEXT, approver_role TEXT,
-  status TEXT, token TEXT, created_at TEXT, decided_at TEXT
+  status TEXT, comment TEXT NOT NULL DEFAULT '', token TEXT, created_at TEXT, decided_at TEXT
 );
 """
 
@@ -71,6 +71,7 @@ def _ensure_approval_graph_columns(conn: sqlite3.Connection) -> None:
         "join_mode": "ALTER TABLE approvals ADD COLUMN join_mode TEXT NOT NULL DEFAULT 'all'",
         "step_id": "ALTER TABLE approvals ADD COLUMN step_id TEXT NOT NULL DEFAULT ''",
         "depends_on": "ALTER TABLE approvals ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'",
+        "comment": "ALTER TABLE approvals ADD COLUMN comment TEXT NOT NULL DEFAULT ''",
     }
     for column, statement in migrations.items():
         if column not in cols:
@@ -255,10 +256,15 @@ def get_crm(conn: sqlite3.Connection, deal_id: str) -> dict[str, Any] | None:
 # --- approvals ---
 def insert_approval(conn: sqlite3.Connection, a: Approval) -> None:
     conn.execute(
-        "INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        """
+        INSERT INTO approvals (
+          id, request_id, method, join_mode, step_id, depends_on, deal_id,
+          discrepancy, approver_role, status, comment, token, created_at, decided_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
         (a.id, a.request_id, a.method, a.join, a.step_id, json.dumps(a.depends_on),
          a.deal_id, json.dumps(a.discrepancy), a.approver_role, a.status,
-         a.token, a.created_at.isoformat(),
+         a.comment, a.token, a.created_at.isoformat(),
          a.decided_at.isoformat() if a.decided_at else None),
     )
     conn.commit()
@@ -275,6 +281,7 @@ def _approval_from_row(row: sqlite3.Row) -> Approval:
                     depends_on=json.loads(row["depends_on"]),
                     deal_id=row["deal_id"], discrepancy=json.loads(row["discrepancy"]),
                     approver_role=row["approver_role"], status=row["status"],
+                    comment=row["comment"],
                     token=row["token"], created_at=datetime.fromisoformat(row["created_at"]),
                     decided_at=_dt(row["decided_at"]))
 
@@ -292,9 +299,21 @@ def list_approvals_for_request(conn: sqlite3.Connection, request_id: str) -> lis
     return [_approval_from_row(row) for row in rows]
 
 
+def list_pending_approvals_for_role(conn: sqlite3.Connection, role: str) -> list[Approval]:
+    rows = conn.execute(
+        """
+        SELECT * FROM approvals
+        WHERE approver_role=? AND status=?
+        ORDER BY created_at, step_id
+        """,
+        (role, "pending"),
+    ).fetchall()
+    return [_approval_from_row(row) for row in rows]
+
+
 def update_approval(conn: sqlite3.Connection, a: Approval) -> None:
     conn.execute(
-        "UPDATE approvals SET status=?, decided_at=? WHERE id=?",
-        (a.status, a.decided_at.isoformat() if a.decided_at else None, a.id),
+        "UPDATE approvals SET status=?, comment=?, decided_at=? WHERE id=?",
+        (a.status, a.comment, a.decided_at.isoformat() if a.decided_at else None, a.id),
     )
     conn.commit()

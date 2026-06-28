@@ -467,6 +467,71 @@ def test_run_session_records_service_method_approval_request(monkeypatch) -> Non
     assert fake_client.interactions.function_results[0][0]["result"]["approval_required"] is True
 
 
+def test_run_session_executes_repeated_tool_name_across_rounds(monkeypatch) -> None:
+    """Regression: tool-result dedup must key on call_id, not tool name.
+
+    interaction.steps is cumulative across the chain. A later round can issue a
+    fresh function_call to the same tool name with a new call_id; deduping by name
+    would treat it as already-resolved and silently drop it, stalling the loop.
+    """
+    class FakeStep:
+        def __init__(self, data: dict[str, Any]) -> None:
+            self._data = data
+
+        def to_dict(self) -> dict[str, Any]:
+            return self._data
+
+    class FakeInteraction:
+        def __init__(self, status: str, steps: list[FakeStep] | None = None, output_text: str | None = None) -> None:
+            self.status = status
+            self.steps = steps or []
+            self.output_text = output_text
+            self.id = f"interaction-{status}"
+            self.environment_id = "env-1"
+
+    fc_one = {"type": "function_call", "id": "call-1", "name": "retrieve_context", "arguments": {"query": "ramp"}}
+    fr_one = {"type": "function_result", "call_id": "call-1", "name": "retrieve_context", "result": {}}
+    fc_two = {"type": "function_call", "id": "call-2", "name": "retrieve_context", "arguments": {"query": "rounding"}}
+
+    class FakeInteractions:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.submitted_call_ids: list[list[str]] = []
+
+        def create(self, **kwargs: object) -> FakeInteraction:
+            self.calls += 1
+            payload = kwargs.get("input")
+            if isinstance(payload, list):
+                self.submitted_call_ids.append([cast(dict[str, Any], r)["call_id"] for r in payload])
+            if self.calls == 1:
+                return FakeInteraction("requires_action", steps=[FakeStep(fc_one)])
+            if self.calls == 2:
+                # Cumulative chain: call-1 resolved; a NEW same-name call-2 is pending.
+                return FakeInteraction("requires_action", steps=[FakeStep(fc_one), FakeStep(fr_one), FakeStep(fc_two)])
+            return FakeInteraction("completed", output_text="{}")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.interactions = FakeInteractions()
+
+    fake_client = FakeClient()
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr("agent.runner.genai.Client", lambda api_key: fake_client)
+    monkeypatch.setattr(
+        "agent.runner.revmem_client.ensure_agent",
+        lambda name: {"id": "agent-1", "permission_tier": "observer", "reputation_score": 0.1},
+    )
+    monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
+    monkeypatch.setattr("agent.runner.revmem_client.retrieve_context", lambda agent_id, query: {"memories": [], "policy": []})
+    monkeypatch.setattr("agent.runner.revmem_client.complete_session", lambda session_id, outcome: {})
+
+    runner.run_session(3)
+
+    # Both rounds ran: call-1, then the same-named call-2 (name-based dedup would have dropped call-2).
+    assert fake_client.interactions.submitted_call_ids == [["call-1"], ["call-2"]]
+
+
 def test_retrieve_context_returns_policy_to_agent(monkeypatch) -> None:
     def fake_retrieve_context(agent_id: str, query: str) -> dict[str, list[dict[str, str]]]:
         assert agent_id == "agent-1"
