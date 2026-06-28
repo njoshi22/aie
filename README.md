@@ -75,6 +75,11 @@ For real approval polling, run the canonical API server and set `REVMEM_BASE_URL
 
 Same Rich terminal UI, but powered by the real Antigravity agent making real decisions and calling RevMem tools.
 
+`uv run python -m cli.run` is scaffold-only and does not call Gemini.
+`uv run python -m cli.run --live` calls Gemini and refuses to run unless
+`REVMEM_BASE_URL` points at a running RevMem API. Use `--allow-stub-live`
+only for explicit offline diagnostics.
+
 **Terminal 1** — start the RevMem API + ngrok:
 
 ```bash

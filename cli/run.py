@@ -150,6 +150,19 @@ def _approval_wait_enabled(no_wait: bool, fast: bool) -> bool:
     return not no_wait and not _fast_mode(fast)
 
 
+def live_runtime_error(stub_mode: bool, base_url: str, allow_stub_live: bool) -> str | None:
+    if stub_mode and not allow_stub_live:
+        return (
+            "--live requires REVMEM_BASE_URL pointing at the RevMem API. "
+            "Start `uv run uvicorn api.main:app --port 8000` and set "
+            "`REVMEM_BASE_URL=http://127.0.0.1:8000`, or pass "
+            "`--allow-stub-live` for an explicit offline smoke run."
+        )
+    if not stub_mode and not base_url:
+        return "REVMEM_BASE_URL is empty even though stub mode is disabled."
+    return None
+
+
 def _beat(seconds: float = 0.6, delay_scale: float | None = None, fast: bool = False) -> None:
     scaled = seconds * _resolve_delay_scale(delay_scale, fast)
     if scaled > 0:
@@ -556,12 +569,23 @@ def main() -> None:
     parser.add_argument("--fast", action="store_true", help="skip demo pacing and approval polling for local integration checks")
     parser.add_argument("--approval-timeout", type=float, default=None, help="seconds to wait for approval before timing out")
     parser.add_argument("--approval-interval", type=float, default=None, help="seconds between approval status polls")
+    parser.add_argument("--allow-stub-live", action="store_true", help="allow --live to use offline RevMem stubs; diagnostic only")
     args = parser.parse_args()
     fast = _fast_mode(args.fast)
     wait = _approval_wait_enabled(args.no_wait, fast)
     delay_scale = _resolve_delay_scale(fast=fast)
 
     if args.live:
+        from agent import revmem_client
+
+        error = live_runtime_error(
+            stub_mode=revmem_client.STUB_MODE,
+            base_url=revmem_client.REVMEM_BASE_URL,
+            allow_stub_live=args.allow_stub_live,
+        )
+        if error:
+            parser.error(error)
+
         if args.runs:
             run_live_repeat(
                 args.runs,
