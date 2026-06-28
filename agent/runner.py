@@ -229,15 +229,17 @@ class _RevMemApprovalClient:
         return revmem_client.get_approval_status(approval_id)
 
 
-def _route_evidence_by_change_type(tool_calls: list[ToolCallRecord]) -> dict[tuple[str, str], JsonObject]:
-    evidence: dict[tuple[str, str], JsonObject] = {}
+def _route_evidence_by_change_type(
+    tool_calls: list[ToolCallRecord],
+) -> dict[tuple[str, str], tuple[JsonObject, str]]:
+    evidence: dict[tuple[str, str], tuple[JsonObject, str]] = {}
     for call in tool_calls:
         if call["name"] != "route_for_approval":
             continue
         deal_id = str(call["arguments"].get("deal_id", ""))
         change_type = str(call["arguments"].get("change_type", ""))
         if deal_id and change_type and call["result"].get("approval_id"):
-            evidence[(deal_id, change_type)] = call["result"]
+            evidence[(deal_id, change_type)] = (call["result"], str(call.get("source", "model")))
     return evidence
 
 
@@ -268,11 +270,15 @@ def audit_decisions_for_tool_evidence(
             continue
 
         change_type = item.change_type or ""
-        route = evidence.get((deal, change_type))
-        if route is None:
+        route_entry = evidence.get((deal, change_type))
+        if route_entry is None:
             audited.append(Decision(decision.field, "miss"))
             notes.append(f"{decision.field}: missing route_for_approval tool call")
             continue
+
+        route, source = route_entry
+        if source == "pre_tool_hook":
+            notes.append(f"{decision.field}: approval routed by pre-tool-use hook")
 
         audited.append(
             Decision(

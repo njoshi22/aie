@@ -75,6 +75,34 @@ def test_material_decision_with_route_tool_uses_tool_route() -> None:
     assert notes == []
 
 
+def test_material_decision_with_hook_routed_approval_is_credited_with_note() -> None:
+    audited, notes = audit_decisions_for_tool_evidence(
+        deal="globex",
+        decisions=[Decision("annual_schedule_usd", "escalate", route_to="controller")],
+        gold=[_gold_schedule()],
+        tool_calls=[
+            {
+                "name": "route_for_approval",
+                "arguments": {
+                    "deal_id": "globex",
+                    "amount_usd": 40000.0,
+                    "change_type": "schedule_change",
+                    "summary": "write_crm requested for globex schedule_change 40000.00",
+                },
+                "result": {
+                    "approval_id": "appr-1",
+                    "route_to": "controller",
+                    "status": "pending",
+                },
+                "source": "pre_tool_hook",
+            }
+        ],
+    )
+
+    assert audited == [Decision("annual_schedule_usd", "escalate", route_to="controller")]
+    assert notes == ["annual_schedule_usd: approval routed by pre-tool-use hook"]
+
+
 def test_missing_route_tool_makes_scorecard_fail_material_recall() -> None:
     audited, notes = audit_decisions_for_tool_evidence(
         deal="globex",
