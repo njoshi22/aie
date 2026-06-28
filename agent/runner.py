@@ -17,8 +17,8 @@ from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
 from agent.scenarios import SCENARIOS
 from agent.tools import get_tools_for_tier
 from evals import behaviors
-from evals.gold import build_gold
-from evals.grade import grade
+from evals.gold import GoldItem, build_gold
+from evals.grade import Decision, grade
 
 load_dotenv()
 
@@ -218,6 +218,53 @@ def _execute_tool(name: str, arguments: JsonObject, agent_id: str, session_id: s
         return {"files": matches}
 
     return {"error": f"Unknown tool: {name}", "skipped": True}
+
+
+def _route_evidence_by_change_type(tool_calls: list[ToolCallRecord]) -> dict[tuple[str, str], JsonObject]:
+    evidence: dict[tuple[str, str], JsonObject] = {}
+    for call in tool_calls:
+        if call["name"] != "route_for_approval":
+            continue
+        deal_id = str(call["arguments"].get("deal_id", ""))
+        change_type = str(call["arguments"].get("change_type", ""))
+        if deal_id and change_type and call["result"].get("approval_id"):
+            evidence[(deal_id, change_type)] = call["result"]
+    return evidence
+
+
+def audit_decisions_for_tool_evidence(
+    deal: str,
+    decisions: list[Decision],
+    gold: list[GoldItem],
+    tool_calls: list[ToolCallRecord],
+) -> tuple[list[Decision], list[str]]:
+    evidence = _route_evidence_by_change_type(tool_calls)
+    gold_by_field = {item.field: item for item in gold}
+    audited: list[Decision] = []
+    notes: list[str] = []
+
+    for decision in decisions:
+        item = gold_by_field.get(decision.field)
+        if item is None or not item.material:
+            audited.append(decision)
+            continue
+
+        change_type = item.change_type or ""
+        route = evidence.get((deal, change_type))
+        if route is None:
+            audited.append(Decision(decision.field, "miss"))
+            notes.append(f"{decision.field}: missing route_for_approval tool call")
+            continue
+
+        audited.append(
+            Decision(
+                decision.field,
+                decision.action,
+                route_to=str(route.get("route_to", decision.route_to or "")) or None,
+            )
+        )
+
+    return audited, notes
 
 
 def run_session(
