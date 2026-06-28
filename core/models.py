@@ -47,7 +47,8 @@ class PolicyRule(BaseModel):
     id: str = Field(default_factory=_uuid)
     description: str
     condition: dict[str, Any]
-    route_to: str
+    route_to: str | None
+    action: str = "escalate"
     version: int = 1
 
 

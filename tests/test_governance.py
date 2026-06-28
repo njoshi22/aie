@@ -2,10 +2,24 @@ from core import governance
 from core.models import PermissionTier, PolicyRule
 
 RULES = [
-    PolicyRule(description="rounding", condition={"min_usd": 0, "max_usd": 1000}, route_to="am"),
-    PolicyRule(description="mid", condition={"min_usd": 1000, "max_usd": 50000}, route_to="controller"),
-    PolicyRule(description="schedule", condition={"change_types": ["schedule_change"]}, route_to="cfo"),
-    PolicyRule(description="discount", condition={"change_types": ["discount_over_authority"]}, route_to="cfo"),
+    PolicyRule(description="rounding", condition={"max_diff_usd": 1}, route_to=None, action="auto_dismiss"),
+    PolicyRule(
+        description="minor",
+        condition={"min_diff_usd": 1, "max_diff_usd": 1000},
+        route_to="am",
+        action="auto_resolve",
+    ),
+    PolicyRule(
+        description="mid",
+        condition={"min_diff_usd": 1000, "max_diff_usd": 50000},
+        route_to="controller",
+    ),
+    PolicyRule(
+        description="schedule",
+        condition={"min_diff_usd": 1000, "max_diff_usd": 50000, "change_types": ["schedule_change"]},
+        route_to="controller",
+    ),
+    PolicyRule(description="discount", condition={"change_types": ["discount_over_authority"]}, route_to="cfo_cco"),
 ]
 
 
@@ -15,9 +29,8 @@ def test_amount_band_routing():
 
 
 def test_change_type_override_wins():
-    # ramp restructuring keeps TCV identical (amount_usd 0) but is material → CFO
-    assert governance.route({"amount_usd": 0, "change_type": "schedule_change"}, RULES) == "cfo"
-    assert governance.route({"amount_usd": 5, "change_type": "discount_over_authority"}, RULES) == "cfo"
+    assert governance.route({"amount_usd": 40000, "change_type": "schedule_change"}, RULES) == "controller"
+    assert governance.route({"amount_usd": 5, "change_type": "discount_over_authority"}, RULES) == "cfo_cco"
 
 
 def test_tool_gating():

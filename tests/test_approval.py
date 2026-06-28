@@ -33,6 +33,7 @@ def _make_analyst(client) -> str:
     aid = client.post("/agents", json={"name": "A"}).json()["id"]
     conn = client.app.state.conn
     agent = database.get_agent(conn, aid)
+    assert agent is not None
     agent.permission_tier = PermissionTier.ANALYST
     database.update_agent(conn, agent)
     return aid
@@ -40,15 +41,17 @@ def _make_analyst(client) -> str:
 
 def test_full_approval_flow(client):
     aid = _make_analyst(client)
-    disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
+    disc = {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}
     routed = client.post("/route_for_approval", json=disc).json()
-    assert routed["route_to"] == "cfo" and routed["status"] == "pending"
+    assert routed["route_to"] == "controller" and routed["status"] == "pending"
     assert "token" not in routed and "approval_link" not in routed  # agent must not receive the secret
     approval_id = routed["approval_id"]
-    tok = database.get_approval(client.app.state.conn, approval_id).token
+    approval = database.get_approval(client.app.state.conn, approval_id)
+    assert approval is not None
+    tok = approval.token
 
     body = {"agent_id": aid, "deal_id": "acme",
-            "fields": {"annual_schedule": [100000, 150000, 200000]},
+            "fields": {"annual_schedule_usd": [100000, 150000, 200000]},
             "discrepancy": disc, "approval_id": approval_id}
     assert client.post("/crm/write", json=body).status_code == 403  # pending → blocked
 
@@ -59,20 +62,22 @@ def test_full_approval_flow(client):
     assert dec.json()["status"] == "approved"
 
     assert client.post("/crm/write", json=body).status_code == 200  # approved → allowed
-    assert client.get("/crm/acme").json()["annual_schedule"] == [100000, 150000, 200000]
+    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
 
 
 def test_approval_scope_bypass_blocked(client):
     aid = _make_analyst(client)
-    disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
+    disc = {"deal_id": "acme", "amount_usd": 40000, "change_type": "schedule_change"}
     routed = client.post("/route_for_approval", json=disc).json()
     approval_id = routed["approval_id"]
-    tok = database.get_approval(client.app.state.conn, approval_id).token
+    approval = database.get_approval(client.app.state.conn, approval_id)
+    assert approval is not None
+    tok = approval.token
 
     # Approve the "acme" approval
     client.post(f"/approvals/{approval_id}/decision", data={"decision": "approve", "token": tok})
 
-    fields = {"annual_schedule": [100000]}
+    fields = {"annual_schedule_usd": [100000]}
     # Using acme's approval_id to authorize a write to a DIFFERENT deal must be blocked
     body_globex = {"agent_id": aid, "deal_id": "globex", "fields": fields,
                    "discrepancy": disc, "approval_id": approval_id}

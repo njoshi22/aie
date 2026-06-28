@@ -26,21 +26,21 @@ def test_agent_and_skill(client):
 
 def test_route_for_approval(client):
     r = client.post("/route_for_approval",
-                    json={"amount_usd": 0, "change_type": "schedule_change"})
-    assert r.json()["route_to"] == "cfo"
+                    json={"amount_usd": 40000, "change_type": "schedule_change"})
+    assert r.json()["route_to"] == "controller"
 
 
 def test_write_crm_denied_for_observer(client):
     aid = client.post("/agents", json={"name": "A"}).json()["id"]
     r = client.post("/crm/write",
                     json={"agent_id": aid, "deal_id": "acme",
-                          "fields": {"annual_schedule": [100000, 150000, 200000]}})
+                          "fields": {"annual_schedule_usd": [100000, 150000, 200000]}})
     assert r.status_code == 403
 
 
 def test_contracts_and_crm_served(client):
-    assert client.get("/contracts/acme").json()["annual_schedule"] == [100000, 150000, 200000]
-    assert client.get("/crm/acme").json()["annual_schedule"] == [150000, 150000, 150000]
+    assert client.get("/contracts/acme").json()["annual_schedule_usd"] == [100000, 150000, 200000]
+    assert client.get("/crm/acme").json()["annual_schedule_usd"] == [150000, 150000, 150000]
 
 
 def test_store_memory_denied_for_observer(client):

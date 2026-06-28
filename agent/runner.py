@@ -2,102 +2,121 @@
 Main agent runner — executes one reconciliation session via Antigravity.
 Usage: source .venv/bin/activate && GEMINI_API_KEY=... python -m agent.runner --session 1
 """
-import os
-import json
 import argparse
-from dataclasses import dataclass, field
+import json
+import os
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, TypedDict, cast
 
 from dotenv import load_dotenv
-load_dotenv()
-
 from google import genai
 
 from agent.templates.agents_md import AGENTS_MD
 from agent.templates.skill_md import generate_skill_md
 from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
 from agent.scenarios import SCENARIOS
-from agent import revmem_client
 from agent.tools import get_tools_for_tier
 from evals import behaviors
 from evals.gold import build_gold
 from evals.grade import grade
 
-DATA_DIR = Path(__file__).parent / "data"
+load_dotenv()
+
+from agent import revmem_client  # noqa: E402
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
 AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-create by name
+JsonObject = dict[str, Any]
+
+
+class ScenarioExpected(TypedDict):
+    material_caught: int
+    false_escalations: int
+    accuracy: float
+    description: str
+
+
+class Scenario(TypedDict):
+    deal: str
+    task: str
+    prompt_style: str
+    expected: ScenarioExpected
 
 
 class RunnerListener(Protocol):
     """Callback interface for live rendering of agent sessions."""
 
     def on_session_start(self, session_number: int, deal: str, tier: str, reputation: float, task: str) -> None: ...
-    def on_tool_call(self, name: str, arguments: dict) -> None: ...
-    def on_tool_result(self, name: str, result: dict) -> None: ...
-    def on_memory_retrieved(self, memories: list[dict]) -> None: ...
+    def on_tool_call(self, name: str, arguments: JsonObject) -> None: ...
+    def on_tool_result(self, name: str, result: JsonObject) -> None: ...
+    def on_memory_retrieved(self, memories: list[JsonObject]) -> None: ...
     def on_agent_response(self, text: str) -> None: ...
-    def on_approval_needed(self, approval: dict) -> None: ...
+    def on_approval_needed(self, approval: JsonObject) -> None: ...
     def on_graded(self, scorecard: object, graded_from_output: bool) -> None: ...
-    def on_session_end(self, result: dict) -> None: ...
+    def on_session_end(self, result: JsonObject) -> None: ...
 
 
 class _PrintListener:
     """Default listener — plain print output (original behavior)."""
 
-    def on_session_start(self, session_number, deal, tier, reputation, task):
+    def on_session_start(self, session_number: int, deal: str, tier: str, reputation: float, task: str) -> None:
         print(f"\n{'='*60}")
         print(f"SESSION {session_number}")
         print(f"Deal: {deal.upper()} | Tier: {tier.upper()} | Rep: {reputation}")
         print(f"Task: {task}")
         print(f"{'='*60}\n")
 
-    def on_tool_call(self, name, arguments):
+    def on_tool_call(self, name: str, arguments: JsonObject) -> None:
         print(f"  [tool] {name}({json.dumps(arguments)})")
 
-    def on_tool_result(self, name, result):
+    def on_tool_result(self, name: str, result: JsonObject) -> None:
         pass
 
-    def on_memory_retrieved(self, memories):
+    def on_memory_retrieved(self, memories: list[JsonObject]) -> None:
         if memories:
             for m in memories:
                 print(f"    memory: {m.get('content', '')[:80]}")
         else:
             print("    (no memories found)")
 
-    def on_agent_response(self, text):
+    def on_agent_response(self, text: str) -> None:
         print(f"\nAgent response:\n{text[:1500]}\n")
 
-    def on_approval_needed(self, approval):
+    def on_approval_needed(self, approval: JsonObject) -> None:
         link = approval.get("approval_link", "")
         route = approval.get("route_to", "unknown")
         print(f"  Routed to {route}: {link}")
 
-    def on_graded(self, scorecard, graded_from_output):
+    def on_graded(self, scorecard: object, graded_from_output: bool) -> None:
         source = "agent output" if graded_from_output else "modeled fallback"
-        print(f"\nGraded outcome ({source}): {json.dumps(scorecard.outcome)}")
-        for note in scorecard.notes:
+        outcome = getattr(scorecard, "outcome")
+        notes = cast(list[str], getattr(scorecard, "notes"))
+        print(f"\nGraded outcome ({source}): {json.dumps(outcome)}")
+        for note in notes:
             print(f"  - {note}")
 
-    def on_session_end(self, result):
-        print(f"Expected (designed): {SCENARIOS[result['session_number']]['expected']['description']}")
+    def on_session_end(self, result: JsonObject) -> None:
+        session_number = cast(int, result["session_number"])
+        scenario = cast(Scenario, SCENARIOS[session_number])
+        print(f"Expected (designed): {scenario['expected']['description']}")
         print(f"Environment ID: {result.get('environment_id', 'n/a')}")
 
 
-def load_deal_data(deal_name: str) -> tuple[dict, dict, dict]:
-    contract = json.loads((DATA_DIR / f"{deal_name}_contract.json").read_text())
-    crm = json.loads((DATA_DIR / f"{deal_name}_crm.json").read_text())
+def load_deal_data(deal_name: str) -> tuple[JsonObject, JsonObject, JsonObject]:
+    contracts = json.loads((DATA_DIR / "contracts.json").read_text())
+    crm_records = json.loads((DATA_DIR / "salesforce.json").read_text())
     policy = json.loads((DATA_DIR / "policy.json").read_text())
-    return contract, crm, policy
+    return contracts[deal_name], crm_records[deal_name], policy
 
 
 def build_environment(
-    contract: dict,
-    crm: dict,
-    policy: dict,
+    contract: JsonObject,
+    crm: JsonObject,
+    policy: JsonObject,
     skill_content: str,
     agents_md: str,
-) -> dict:
+) -> JsonObject:
     return {
         "type": "remote",
         "sources": [
@@ -133,13 +152,20 @@ def build_environment(
 _ENV_FILES: dict[str, str] = {}
 
 
-def _execute_tool(name: str, arguments: dict, agent_id: str, session_id: str) -> dict:
+def _execute_tool(name: str, arguments: JsonObject, agent_id: str, session_id: str) -> JsonObject:
     """Execute a tool call against RevMem and return the result as a dict."""
+    if name == "get_contract":
+        return revmem_client.get_contract(str(arguments.get("deal_id", "")))
+
+    if name == "get_crm_record":
+        return revmem_client.get_crm_record(str(arguments.get("deal_id", "")))
+
     if name == "retrieve_context":
-        memories = revmem_client.retrieve_context(
+        bundle = revmem_client.retrieve_context(
             agent_id, arguments.get("query", ""),
         )
-        return {"memories": memories, "count": len(memories)}
+        memories = bundle.get("memories", [])
+        return {"memories": memories, "policy": bundle.get("policy", []), "count": len(memories)}
 
     if name == "store_memory":
         mem = revmem_client.store_memory(
@@ -152,23 +178,37 @@ def _execute_tool(name: str, arguments: dict, agent_id: str, session_id: str) ->
 
     if name == "route_for_approval":
         result = revmem_client.route_for_approval(
-            arguments.get("deal_id", ""),
-            arguments.get("amount_usd", 0),
-            arguments.get("change_type", ""),
+            str(arguments.get("deal_id", "")),
+            float(arguments.get("amount_usd", 0)),
+            str(arguments.get("change_type", "")),
             summary=arguments.get("summary", ""),
         )
         return result
 
+    if name == "get_approval_status":
+        return revmem_client.get_approval_status(str(arguments.get("approval_id", "")))
+
+    if name == "write_crm":
+        fields = arguments.get("fields", {})
+        discrepancy = arguments.get("discrepancy", {})
+        return revmem_client.write_crm(
+            agent_id=agent_id,
+            deal_id=str(arguments.get("deal_id", "")),
+            fields=cast(JsonObject, fields) if isinstance(fields, dict) else {},
+            discrepancy=cast(JsonObject, discrepancy) if isinstance(discrepancy, dict) else {},
+            approval_id=cast(str | None, arguments.get("approval_id")),
+        )
+
     if name == "read_file":
-        path = arguments.get("path", "")
+        path = str(arguments.get("path", ""))
         for key, content in _ENV_FILES.items():
             if path.endswith(key) or key.endswith(path.lstrip("/.")) or path in key:
                 return {"content": content}
         return {"error": f"File not found: {path}"}
 
     if name == "list_files":
-        path = arguments.get("path", ".")
-        matches = [k for k in _ENV_FILES if k.startswith(path.rstrip("/")) or path == "."]
+        path = str(arguments.get("path", "."))
+        matches = [key for key in _ENV_FILES if key.startswith(path.rstrip("/")) or path == "."]
         return {"files": matches}
 
     return {"error": f"Unknown tool: {name}", "skipped": True}
@@ -180,21 +220,24 @@ def run_session(
     prev_interaction_id: str | None = None,
     stream: bool = True,
     listener: RunnerListener | None = None,
-) -> dict:
-    listener = listener or _PrintListener()
+) -> JsonObject:
+    active_listener: RunnerListener = listener if listener is not None else _PrintListener()
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    scenario = SCENARIOS[session_number]
+    scenario = cast(Scenario, SCENARIOS[session_number])
+    deal = scenario["deal"]
+    task = scenario["task"]
 
-    contract, crm, policy = load_deal_data(scenario["deal"])
+    contract, crm, policy = load_deal_data(deal)
 
     agent_state = revmem_client.ensure_agent(AGENT_NAME)
-    agent_id = agent_state["id"]
-    tier = agent_state["permission_tier"]
+    agent_id = str(agent_state["id"])
+    tier = str(agent_state["permission_tier"])
+    reputation = float(agent_state["reputation_score"])
 
-    listener.on_session_start(session_number, scenario["deal"], tier, agent_state["reputation_score"], scenario["task"])
+    active_listener.on_session_start(session_number, deal, tier, reputation, task)
 
-    session = revmem_client.start_session(agent_id, scenario["task"])
-    session_id = session["id"]
+    session = revmem_client.start_session(agent_id, task)
+    session_id = str(session["id"])
 
     if scenario["prompt_style"] == "cold_start":
         prompt = build_cold_start_prompt(contract, crm)
@@ -209,38 +252,25 @@ def run_session(
     for src in environment["sources"]:
         _ENV_FILES[src["target"]] = src["content"]
 
-    create_kwargs = {
-        "agent": AGENT_MODEL,
-        "input": prompt,
-        "tools": tools,
-    }
-
-    if env_id:
-        create_kwargs["environment"] = env_id
-    else:
-        create_kwargs["environment"] = environment
-
-    if prev_interaction_id:
-        create_kwargs["previous_interaction_id"] = prev_interaction_id
-
-    interaction = client.interactions.create(**create_kwargs)
+    create_interaction = cast(Any, client.interactions.create)
+    interaction = create_interaction(
+        agent=AGENT_MODEL,
+        input=prompt,
+        tools=tools,
+        environment=env_id or environment,
+        previous_interaction_id=prev_interaction_id,
+    )
     memories_used = 0
     tool_calls_made = []
 
-    max_tool_rounds = 3
-    for round_num in range(max_tool_rounds):
-        print(f"\n[debug] round {round_num}: interaction.status={interaction.status}", flush=True)
+    max_tool_rounds = 8
+    for _ in range(max_tool_rounds):
         if interaction.status != "requires_action":
             break
 
         all_steps = [s.to_dict() for s in interaction.steps]
-        print(f"[debug] all steps ({len(all_steps)}):", flush=True)
-        for s in all_steps:
-            print(f"  type={s.get('type')}  name={s.get('name', '-')}  id={s.get('id', '-')[:12]}", flush=True)
-
         resolved_tools = {s.get("name") for s in all_steps if s.get("type") == "function_result"}
         fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("name") not in resolved_tools]
-        print(f"[debug] fc_steps (unresolved): {[s['name'] for s in fc_steps]} | already resolved: {resolved_tools}", flush=True)
         if not fc_steps:
             break
 
@@ -248,19 +278,19 @@ def run_session(
         for fc in fc_steps:
             tool_name = fc["name"]
             tool_args = fc.get("arguments", {})
-            listener.on_tool_call(tool_name, tool_args)
+            active_listener.on_tool_call(tool_name, tool_args)
             tool_calls_made.append(tool_name)
 
             tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
-            listener.on_tool_result(tool_name, tool_result)
+            active_listener.on_tool_result(tool_name, tool_result)
 
             if tool_name == "retrieve_context":
                 mems = tool_result.get("memories", [])
                 memories_used += len(mems)
-                listener.on_memory_retrieved(mems)
+                active_listener.on_memory_retrieved(mems)
 
             if tool_name == "route_for_approval" and tool_result.get("approval_id"):
-                listener.on_approval_needed(tool_result)
+                active_listener.on_approval_needed(tool_result)
 
             results.append({
                 "type": "function_result",
@@ -269,18 +299,15 @@ def run_session(
                 "result": tool_result,
             })
 
-        print(f"[debug] sending {len(results)} results: {[r['name'] for r in results]}", flush=True)
-        print(f"[debug] calling interactions.create with prev_id={interaction.id[:12]}...", flush=True)
-        interaction = client.interactions.create(
+        interaction = create_interaction(
             agent=AGENT_MODEL,
             previous_interaction_id=interaction.id,
             environment=interaction.environment_id,
             input=results,
         )
-        print(f"[debug] got response: status={interaction.status}", flush=True)
 
     output = interaction.output_text or "(no text output)"
-    listener.on_agent_response(output)
+    active_listener.on_agent_response(output)
 
     decisions = behaviors.decisions_from_output(output)
     graded_from_output = bool(decisions)
@@ -290,16 +317,16 @@ def run_session(
             decisions = behaviors.modeled(step)
         except KeyError:
             decisions = []
-    scorecard = grade(scenario["deal"], decisions, build_gold(scenario["deal"]))
+    scorecard = grade(deal, decisions, build_gold(deal))
     outcome = scorecard.outcome
 
     result = {
         "session_number": session_number,
         "session_id": session_id,
         "agent_id": agent_id,
-        "deal": scenario["deal"],
+        "deal": deal,
         "tier": tier,
-        "reputation": agent_state["reputation_score"],
+        "reputation": reputation,
         "memories_used": memories_used,
         "agent_output": output,
         "interaction_id": interaction.id,
@@ -309,8 +336,8 @@ def run_session(
     }
 
     revmem_client.complete_session(session_id, outcome)
-    listener.on_graded(scorecard, graded_from_output)
-    listener.on_session_end(result)
+    active_listener.on_graded(scorecard, graded_from_output)
+    active_listener.on_session_end(result)
 
     return result
 

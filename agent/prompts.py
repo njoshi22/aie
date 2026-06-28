@@ -24,18 +24,21 @@ def build_reconciliation_prompt(
 
     prompt += (
         "INSTRUCTIONS:\n"
-        "1. First, call retrieve_context to check for lessons from past reconciliations.\n"
+        "1. First, call retrieve_context. Use both returned memories and returned policy rules.\n"
         "2. Compare every pricing field between the contract and CRM record.\n"
         "3. For each field, state whether it matches or not.\n"
         "4. For mismatches, classify as material or immaterial.\n"
-        "5. Route each discrepancy to the correct approver per the policy.\n"
-        "6. Output your analysis as the JSON format specified in AGENTS.md.\n"
+        "5. Route material discrepancies to the correct approver using the returned policy.\n"
+        "6. If you receive an approval_id, call get_approval_status with that id.\n"
+        "7. If status is approved and your tier allows writes, call write_crm with the exact "
+        "approved discrepancy and corrected fields. If status is pending or rejected, do not write.\n"
+        "8. Output your analysis as the JSON format specified in AGENTS.md.\n"
     )
 
     if tier == "observer":
         prompt += (
             "\nYou are in OBSERVER mode. You may only flag and escalate. "
-            "Do NOT attempt to resolve or auto-dismiss anything.\n"
+            "Do NOT attempt to resolve, auto-dismiss, or write CRM changes.\n"
         )
     elif tier == "analyst":
         prompt += (

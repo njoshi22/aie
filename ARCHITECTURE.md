@@ -12,12 +12,12 @@ RevMem is the **governed memory + reputation layer** that sits on top of a Gemin
 
 The demo's hero is the **agent's behavior**, not a dashboard. An autonomous Gemini agent receives a newly-signed customer contract, reconciles its pricing against the CRM (mock Salesforce), routes discrepancies to the correct approver, and — across sessions — **visibly gets smarter and earns broader autonomy** because RevMem governs and improves its memory.
 
-**Demo story in 60 seconds**: Agent gets a signed contract → reconciles against CRM → the cold agent over-escalates a rounding artifact *and* misses a material ramp restructuring → RevMem captures the lesson from that outcome → next session the agent ignores the noise, catches the ramp, and routes it correctly → reputation rises, permissions expand → by session three it auto-reconciles low-risk corrections itself and escalates only genuine judgment calls.
+**Demo story in 60 seconds**: Agent gets a signed contract → reconciles against CRM → the cold agent over-escalates a rounding artifact _and_ misses a material ramp restructuring → RevMem captures the lesson from that outcome → next session the agent ignores the noise, catches the ramp, and routes it correctly → reputation rises, permissions expand → by session three it auto-reconciles low-risk corrections itself and escalates only genuine judgment calls.
 
 ### Two statefulness layers (this is the pitch)
 
-- **Antigravity env-ID** gives *raw* session continuity (files, terminal, code state).
-- **RevMem** adds the *governed, reputation-scored, policy-bounded* memory layer that makes that continuity safe in a regulated domain.
+- **Antigravity env-ID** gives _raw_ session continuity (files, terminal, code state).
+- **RevMem** adds the _governed, reputation-scored, policy-bounded_ memory layer that makes that continuity safe in a regulated domain.
 
 RevMem sits **on top of** the Gemini primitive — that is the Self-Improvement-Stack story, and a far stronger claim than "we called the Gemini API."
 
@@ -27,11 +27,11 @@ RevMem sits **on top of** the Gemini primitive — that is the Self-Improvement-
 
 The 2026 rules disqualify several patterns. The architecture is built to avoid them:
 
-| Banned pattern | How we avoid it |
-|----------------|-----------------|
-| **Streamlit applications** | No Streamlit, and no web dashboard at all — the agent-working view is a **CLI (Rich)**. The only web surface is a single CFO approval page reached from an email link. |
-| **Any project where a dashboard is the main feature** | The autonomous agent workflow is the main feature, shown as a live terminal transcript. Reputation/routing are thin overlays *embedded in the CLI*, never a standalone dashboard. |
-| **Basic RAG applications** | The hero is an *experiential continual-learning loop* (agent learns from its own mistake). The policy is framed as a **governance boundary**, never "document ingestion." |
+| Banned pattern                                        | How we avoid it                                                                                                                                                                   |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Streamlit applications**                            | No Streamlit, and no web dashboard at all — the agent-working view is a **CLI (Rich)**. The only web surface is a single CFO approval page reached from an email link.            |
+| **Any project where a dashboard is the main feature** | The autonomous agent workflow is the main feature, shown as a live terminal transcript. Reputation/routing are thin overlays _embedded in the CLI_, never a standalone dashboard. |
+| **Basic RAG applications**                            | The hero is an _experiential continual-learning loop_ (agent learns from its own mistake). The policy is framed as a **governance boundary**, never "document ingestion."         |
 
 Demo must show only what we built during the event and clearly identify it. Repo public.
 
@@ -39,19 +39,19 @@ Demo must show only what we built during the event and clearly identify it. Repo
 
 ## Decisions Made
 
-| Decision | Choice | Why |
-|----------|--------|-----|
-| Agent runtime | **Gemini Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via Interactions API | Bleeding-edge → scores the 40% technicality weight; env-ID statefulness *is* the continual-learning substrate; eligible for the $5k Gemini prize |
-| Memory substrate | **SQLite (stdlib, `db/revmem.db`)** + embedding-cosine rerank | Zero infra; persists on the local demo disk; the demo's retrieval intelligence is the reputation rerank, not the store |
-| Data interface | **Structured JSON** (agent reads contract/CRM via tools) | Reliable; keeps the heavy reasoning off flaky UI automation |
-| API + exposure | **FastAPI run locally, exposed via ngrok tunnel** | The hosted agent needs a reachable URL; ngrok gives instant reloads, local logs, no deploy cycle |
-| Agent view | **CLI (Rich) live transcript** | Streamlit / dashboard-as-main-feature are banned; a terminal transcript foregrounds agent behavior |
-| Approval surface | **One FastAPI-served HTML page**, reached from an email link | Minimal web surface; co-located with the governance engine that owns the approval record |
-| Approval gate | **Server-enforced in the Governance Engine at `write_crm`** | The hosted agent is untrusted/non-deterministic — the financial control cannot live in the agent |
-| Skills / permissions | **Tier-scoped `AGENTS.md` + `SKILL.md`, regenerated per session** | Permission expansion becomes a native Antigravity feature, enforced server-side at the tool layer |
-| Scenario | Contract → CRM pricing reconciliation + approver routing | Recognizable enterprise workflow with a natural governance moment |
-| Deployment | Local SQLite + local FastAPI + ngrok tunnel + hosted agent (Google) | Nothing in the critical path depends on a managed service |
-| Demo format | Pre-run S1 + S2, **live S3**, recorded fallback | De-risks the 20% live-demo score |
+| Decision             | Choice                                                                                      | Why                                                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent runtime        | **Gemini Managed Agents (Antigravity, `antigravity-preview-05-2026`)** via Interactions API | Bleeding-edge → scores the 40% technicality weight; env-ID statefulness _is_ the continual-learning substrate; eligible for the $5k Gemini prize |
+| Memory substrate     | **SQLite (stdlib, `db/revmem.db`)** + embedding-cosine rerank                               | Zero infra; persists on the local demo disk; the demo's retrieval intelligence is the reputation rerank, not the store                           |
+| Data interface       | **Structured JSON** (agent reads contract/CRM via tools)                                    | Reliable; keeps the heavy reasoning off flaky UI automation                                                                                      |
+| API + exposure       | **FastAPI run locally, exposed via ngrok tunnel**                                           | The hosted agent needs a reachable URL; ngrok gives instant reloads, local logs, no deploy cycle                                                 |
+| Agent view           | **CLI (Rich) live transcript**                                                              | Streamlit / dashboard-as-main-feature are banned; a terminal transcript foregrounds agent behavior                                               |
+| Approval surface     | **One FastAPI-served HTML page**, reached from an email link                                | Minimal web surface; co-located with the governance engine that owns the approval record                                                         |
+| Approval gate        | **Server-enforced in the Governance Engine at `write_crm`**                                 | The hosted agent is untrusted/non-deterministic — the financial control cannot live in the agent                                                 |
+| Skills / permissions | **Tier-scoped `AGENTS.md` + `SKILL.md`, regenerated per session**                           | Permission expansion becomes a native Antigravity feature, enforced server-side at the tool layer                                                |
+| Scenario             | Contract → CRM pricing reconciliation + approver routing                                    | Recognizable enterprise workflow with a natural governance moment                                                                                |
+| Deployment           | Local SQLite + local FastAPI + ngrok tunnel + hosted agent (Google)                         | Nothing in the critical path depends on a managed service                                                                                        |
+| Demo format          | Pre-run S1 + S2, **live S3**, recorded fallback                                             | De-risks the 20% live-demo score                                                                                                                 |
 
 ---
 
@@ -90,14 +90,14 @@ Demo must show only what we built during the event and clearly identify it. Repo
 
 ## Two Improvement Axes (kept rigorously separate)
 
-**1. Continual learning — the hero (theme-critical, *not* RAG).**
-The agent learns the **ramp lesson** — *"TCV parity is insufficient for ramped deals; reconcile the annual schedule"* — from **its own Session-1 mistake**. The reviewer's correction on the S1 outcome creates one experiential memory. It is retrieved in later sessions via embedding cosine and reranked by reputation-weighted relevance.
+**1. Continual learning — the hero (theme-critical, _not_ RAG).**
+The agent learns the **ramp lesson** — _"TCV parity is insufficient for ramped deals; reconcile the annual schedule"_ — from **its own Session-1 mistake**. The reviewer's correction on the S1 outcome creates one experiential memory. It is retrieved in later sessions via embedding cosine and reranked by reputation-weighted relevance.
 
 **2. Governance — config, framed as a "boundary" (never "doc ingestion").**
-A delegation-of-authority (DOA) policy drives **approver routing** (AM → Controller → CFO/CCO by materiality). Editing the policy re-routes live. This is the *Adaptive Governance* feature, distinct from reputation tiers.
+A delegation-of-authority (DOA) policy drives **approver routing** (AM → Controller → CFO/CCO by materiality). Editing the policy re-routes live. This is the _Adaptive Governance_ feature, distinct from reputation tiers.
 
-> **Permission tiers** (earned via reputation) = what the *agent* may do unsupervised.
-> **Policy routing** (org-configured) = the org's rules on *who approves what*.
+> **Permission tiers** (earned via reputation) = what the _agent_ may do unsupervised.
+> **Policy routing** (org-configured) = the org's rules on _who approves what_.
 > Two governance sources, never blurred.
 
 ---
@@ -168,14 +168,14 @@ class PermissionTier:
 
 ## Agent Tools (reputation-gated via SKILL.md, enforced server-side)
 
-| Tool | Purpose | Tier gate |
-|------|---------|-----------|
-| `get_contract(deal_id)` / `get_crm_record(deal_id)` | Fetch structured order form + CRM record | any |
-| `retrieve_context(deal_type, query)` | Embedding-cosine retrieval of experiential memories + active policy | any |
-| `route_for_approval(discrepancy)` | Governance picks approver per policy, **creates a pending Approval**, emits the email link, returns `approval_id` | any |
-| `write_crm(deal_id, fields, approval_id)` | Reconcile CRM to the signed contract — **server-gated by `authorize_write`** | ANALYST+ **and** an approved record (AUTONOMOUS may self-reconcile policy-covered fixes) |
-| `log_outcome(session_id, decisions, result)` | Close session → triggers reputation + relevance updates | any |
-| `store_memory(...)` | Persist an experiential lesson | **ANALYST+** |
+| Tool                                                | Purpose                                                                                                           | Tier gate                                                                                |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `get_contract(deal_id)` / `get_crm_record(deal_id)` | Fetch structured order form + CRM record                                                                          | any                                                                                      |
+| `retrieve_context(deal_type, query)`                | Embedding-cosine retrieval of experiential memories + active policy                                               | any                                                                                      |
+| `route_for_approval(discrepancy)`                   | Governance picks approver per policy, **creates a pending Approval**, emits the email link, returns `approval_id` | any                                                                                      |
+| `write_crm(deal_id, fields, approval_id)`           | Reconcile CRM to the signed contract — **server-gated by `authorize_write`**                                      | ANALYST+ **and** an approved record (AUTONOMOUS may self-reconcile policy-covered fixes) |
+| `log_outcome(session_id, decisions, result)`        | Close session → triggers reputation + relevance updates                                                           | any                                                                                      |
+| `store_memory(...)`                                 | Persist an experiential lesson                                                                                    | **ANALYST+**                                                                             |
 
 Each session, RevMem generates a **tier-scoped `SKILL.md`**: higher reputation declares more skills → broader autonomy. The Governance Engine re-checks tier at the tool layer as defense-in-depth.
 
@@ -229,25 +229,28 @@ Real reranking driven by embedding cosine — not keyword matching. (Embeddings 
 
 **The hero mismatch (Acme):**
 
-| Field | Signed contract | Salesforce (stale) | Verdict |
-|-------|-----------------|--------------------|---------|
-| Seats | 1,000 | 1,000 | match |
-| **TCV** | **$450,000** | **$450,000** | **match ← the trap** |
-| **Annual schedule** | **$100k / $150k / $200k (ramped)** | **$150k / $150k / $150k (flat)** | **MISMATCH — material** |
-| Discount | 10% | 10% | match |
-| Y1 monthly invoice | $8,333.33 | $8,333.00 | $0.33 rounding — immaterial |
+| Field               | Signed contract                    | Salesforce (stale)               | Verdict                     |
+| ------------------- | ---------------------------------- | -------------------------------- | --------------------------- |
+| Seats               | 1,000                              | 1,000                            | match                       |
+| **TCV**             | **$450,000**                       | **$450,000**                     | **match ← the trap**        |
+| **Annual schedule** | **$100k / $150k / $200k (ramped)** | **$150k / $150k / $150k (flat)** | **MISMATCH — material**     |
+| Discount            | 10%                                | 10%                              | match                       |
+| Y1 monthly invoice  | $8,333.33                          | $8,333.00                        | $0.33 rounding — immaterial |
 
 The trap: **TCV reconciles, so a naive total-check passes.** The ramp restructuring wrecks Year-1 revenue and ARR timing (material), while the $0.33 artifact tempts an over-flag.
 
 ### Session 1 — Cold start (rep 0.1, OBSERVER)
-No prior deals → RevMem has genuinely nothing learned (the weakness is *real*, not faked). Agent sees TCV matches → "looks fine," then escalates the **$0.33 rounding** to the CFO (no routing rule yet) and **misses the ramp**. Outcome logged; reviewer correction → creates the one experiential memory.
+
+No prior deals → RevMem has genuinely nothing learned (the weakness is _real_, not faked). Agent sees TCV matches → "looks fine," then escalates the **$0.33 rounding** to the CFO (no routing rule yet) and **misses the ramp**. Outcome logged; reviewer correction → creates the one experiential memory.
 **Outcome:** `{material_caught: 0/1, false_escalations: 1, accuracy: 0.0}` → rep ~0.2, OBSERVER.
 
 ### Session 2 — Same Acme contract (rep 0.2, OBSERVER)
+
 Retrieves the ramp memory → **ignores the rounding, catches the ramp, escalates only that** to the correct approver. **Permission tier unchanged** — isolating the variable: the improvement is **pure RevMem context**, not expanded permissions.
 **Outcome:** `{material_caught: 1/1, false_escalations: 0, accuracy: 1.0}` → rep ~0.5 → **ANALYST**.
 
 ### Session 3 — LIVE, new Globex contract (rep ~0.5, ANALYST)
+
 Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $360k matches again). The lesson **generalizes** (keyed on `deal_type`, not Acme's numbers). The agent **silently dismisses the immaterial rounding** (an ANALYST capability it lacked as OBSERVER), catches the ramp, escalates it with a recommended correction, and — on **live approval** (presenter clicks Approve on the served approval page) — **executes the CRM write itself** (the new ANALYST permission: OBSERVER could only flag, never touch the CRM).
 **Live flourish:** edit the governance boundary on stage ($1k → $5k threshold) and re-run to show routing shift in real time.
 **Optional judgment twist:** Globex contract has a 25% discount vs deal-desk max 20% → agent reconciles the ramp **but correctly escalates the over-authority discount** to the CFO.
@@ -256,6 +259,7 @@ Different numbers, same archetype (ramp $80k/$120k/$160k vs flat $120k×3; TCV $
 Reputation track: **0.1 → 0.2 → 0.5 → 0.65** · tiers **OBSERVER → OBSERVER → ANALYST → AUTONOMOUS**.
 
 The two transitions cleanly separate the two effects:
+
 - **S1 → S2:** smarter context, **same permissions** (isolates "RevMem made it smarter").
 - **S2 → S3:** permissions **expand**, unlocking new actions.
 
@@ -263,12 +267,12 @@ The two transitions cleanly separate the two effects:
 
 ## How It Scores the Rubric
 
-| Criterion | Weight | Our story |
-|-----------|--------|-----------|
-| **Technicality** | 40% | Antigravity managed agent + env-ID statefulness + embedding-cosine reranking + server-enforced governance/approval/reputation engine. Hard to recreate. |
-| **Creativity & Originality** | 25% | Governed, reputation-earned autonomy in finance — not a wrapper chatbot. |
-| **Live Demo** | 20% | S1/S2 pre-run; S3 live (approval page + policy edit) with recorded fallback. |
-| **Future Potential** | 15% | The missing infra layer for safely deploying improving agents in regulated domains. |
+| Criterion                    | Weight | Our story                                                                                                                                               |
+| ---------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Technicality**             | 40%    | Antigravity managed agent + env-ID statefulness + embedding-cosine reranking + server-enforced governance/approval/reputation engine. Hard to recreate. |
+| **Creativity & Originality** | 25%    | Governed, reputation-earned autonomy in finance — not a wrapper chatbot.                                                                                |
+| **Live Demo**                | 20%    | S1/S2 pre-run; S3 live (approval page + policy edit) with recorded fallback.                                                                            |
+| **Future Potential**         | 15%    | The missing infra layer for safely deploying improving agents in regulated domains.                                                                     |
 
 ---
 
@@ -312,6 +316,7 @@ revmem/
 ## Work Split
 
 ### Person A — Antigravity owner (starts hour 0, highest risk)
+
 1. Interactions API: spin up a managed agent, confirm a round-trip call (**by hour 4**)
 2. env-ID threading for cross-session continuity
 3. `AGENTS.md` persona + tier-scoped `SKILL.md` generation
@@ -320,6 +325,7 @@ revmem/
 6. Local-Gemini-loop fallback if Antigravity isn't working by hour 8
 
 ### Person B — RevMem core + API (hour 0–16)
+
 1. `core/models.py` (30m)
 2. `core/database.py` — SQLite schema + CRUD, incl. approvals (1h)
 3. `core/context.py` — retrieve + rerank (2h)
@@ -333,6 +339,7 @@ revmem/
 > Detailed task-by-task plan: `docs/superpowers/plans/2026-06-27-revmem-person-b-core-api.md`
 
 ### Person C — Agent view CLI (Rich) + notification (hour 0–16)
+
 1. `cli/render.py` + `cli/run.py` — Rich live agent transcript (the **main feature**) (3h)
 2. Reputation + routing overlays embedded in the transcript (2h)
 3. `notify/email.py` — single CFO approval email (Resend + dry-run fallback) (2h)
@@ -342,41 +349,42 @@ revmem/
 > The **canonical** approval endpoints + SQLite store + `authorize_write` gate are **Person B's**. Person C owns the email, the CLI view, and the page styling. Polling the approval status is the **agent's** (Person A's) job via Person B's `/approvals/{id}/status`; the CLI polls only as a stand-in until that agent is wired.
 
 ### Everyone — last 8 hours
-| Hours | Activity |
-|-------|----------|
-| 16–18 | Full integration: run 3 sessions end-to-end |
-| 18–20 | Bug fixes, scenario tuning, rehearsal |
+
+| Hours | Activity                                           |
+| ----- | -------------------------------------------------- |
+| 16–18 | Full integration: run 3 sessions end-to-end        |
+| 18–20 | Bug fixes, scenario tuning, rehearsal              |
 | 20–22 | Record 1-min video + S3 fallback recording; README |
-| 22–24 | Final polish, rehearse live S3, push public repo |
+| 22–24 | Final polish, rehearse live S3, push public repo   |
 
 ---
 
 ## Timeline Checkpoints
 
-| Hour | Checkpoint | Must be true |
-|------|-----------|--------------|
-| 4 | **Skeleton** | Antigravity round-trip call works; SQLite seeded; CLI renders; models defined |
-| 8 | **Pieces work** | Retrieve+rerank works; agent reconciles mock data; approval page resolves; CLI shows a live run. **Antigravity go/no-go → else local-loop fallback** |
-| 12 | **Integration** | Agent calls RevMem tools through ngrok, routes for approval, stores memory; CLI reads from same store |
-| 16 | **Demo flow** | 3 sessions run end-to-end; improvement + permission expansion + approval gate visible |
-| 20 | **Polish** | S3 rehearsed; edge cases handled; routing live-edit works |
-| 24 | **Ship** | Video recorded, README written, repo public, ngrok tunnel stable |
+| Hour | Checkpoint      | Must be true                                                                                                                                         |
+| ---- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4    | **Skeleton**    | Antigravity round-trip call works; SQLite seeded; CLI renders; models defined                                                                        |
+| 8    | **Pieces work** | Retrieve+rerank works; agent reconciles mock data; approval page resolves; CLI shows a live run. **Antigravity go/no-go → else local-loop fallback** |
+| 12   | **Integration** | Agent calls RevMem tools through ngrok, routes for approval, stores memory; CLI reads from same store                                                |
+| 16   | **Demo flow**   | 3 sessions run end-to-end; improvement + permission expansion + approval gate visible                                                                |
+| 20   | **Polish**      | S3 rehearsed; edge cases handled; routing live-edit works                                                                                            |
+| 24   | **Ship**        | Video recorded, README written, repo public, ngrok tunnel stable                                                                                     |
 
 ---
 
 ## Risk Mitigation
 
-| Risk | Mitigation |
-|------|-----------|
-| Antigravity flakes / unfamiliar | One owner from hour 0; go/no-go at hour 8; **local-Gemini-loop fallback** (keeps themes, forfeits $5k only) |
-| Live S3 breaks | Pre-run S1/S2; recorded S3 fallback |
-| Reads as a "dashboard project" (disqualifying) | Agent view is a CLI transcript; the only web page is the approval surface |
-| Reads as "basic RAG" (disqualifying) | Lead with the experiential learning loop; call policy a "governance boundary" |
-| Agent writes CRM without approval | `authorize_write` is server-side; no approved record → no write, regardless of agent behavior |
-| Hosted agent can't reach RevMem | Expose via ngrok with a **reserved domain** (stable URL); agent reads `REVMEM_BASE_URL` (no hardcode) |
-| Tunnel drops on venue wifi | Phone hotspot backup; disable laptop sleep; pre-run S1/S2 so only S3 needs the live tunnel |
-| Email delivery flaky | Email is stubbed — the approval link is printed in the CLI; presenter opens it directly |
-| Embedding API latency | Pre-embed memories at write time; cache S1/S2 runs |
+| Risk                                           | Mitigation                                                                                                  |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Antigravity flakes / unfamiliar                | One owner from hour 0; go/no-go at hour 8; **local-Gemini-loop fallback** (keeps themes, forfeits $5k only) |
+| Live S3 breaks                                 | Pre-run S1/S2; recorded S3 fallback                                                                         |
+| Reads as a "dashboard project" (disqualifying) | Agent view is a CLI transcript; the only web page is the approval surface                                   |
+| Reads as "basic RAG" (disqualifying)           | Lead with the experiential learning loop; call policy a "governance boundary"                               |
+| Agent writes CRM without approval              | `authorize_write` is server-side; no approved record → no write, regardless of agent behavior               |
+| Hosted agent can't reach RevMem                | Expose via ngrok with a **reserved domain** (stable URL); agent reads `REVMEM_BASE_URL` (no hardcode)       |
+| Tunnel drops on venue wifi                     | Phone hotspot backup; disable laptop sleep; pre-run S1/S2 so only S3 needs the live tunnel                  |
+| Email delivery flaky                           | Email is stubbed — the approval link is printed in the CLI; presenter opens it directly                     |
+| Embedding API latency                          | Pre-embed memories at write time; cache S1/S2 runs                                                          |
 
 ---
 
