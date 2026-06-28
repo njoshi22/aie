@@ -98,7 +98,7 @@ def test_interaction_create_reports_wait_timing() -> None:
     assert end_event[2] >= 0
 
 
-def test_session_one_completion_payload_seeds_reviewer_lesson() -> None:
+def test_session_one_completion_payload_has_no_hardcoded_lesson() -> None:
     payload = runner._completion_payload(
         {"accuracy": 0.0},
         memories_used=[],
@@ -106,8 +106,7 @@ def test_session_one_completion_payload_seeds_reviewer_lesson() -> None:
         scenario=cast(runner.Scenario, SCENARIOS[1]),
     )
 
-    assert payload["lesson"]["content"].startswith("TCV parity is insufficient")
-    assert payload["lesson"]["metadata"]["source"] == "session_1_reviewer_correction"
+    assert "lesson" not in payload
 
 
 def test_prompt_uses_prefetched_memories_without_forcing_tool_call() -> None:

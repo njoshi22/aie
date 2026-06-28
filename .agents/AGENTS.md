@@ -38,3 +38,11 @@ Respond with a JSON object:
   }
 }
 ```
+
+## Handling Feedback
+
+When a human reviewer provides feedback on your analysis:
+
+1. Extract the specific rule or pattern from the feedback.
+2. Call `store_memory` with type `lesson` to persist it.
+3. In future reconciliations, call `retrieve_context` first — apply any retrieved lessons before making routing or materiality decisions.
