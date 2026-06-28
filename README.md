@@ -14,7 +14,7 @@ Built on hosted Gemini/Antigravity interactions, a local **FastAPI** governance 
 ## Setup
 
 ```bash
-git clone <repo-url> && cd revmem
+git clone <repo-url> && cd aie
 uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 
