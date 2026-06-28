@@ -43,7 +43,7 @@ uv run python -m pytest evals/test_grade.py -v
 uv run python -m evals.run
 ```
 
-### 2. Run the CLI demo (scaffold mode)
+### 2. Run the CLI demo (scaffold mode, no API key)
 
 The CLI replays a reconciliation session with mock data and drives the CFO approval gate.
 
@@ -66,7 +66,35 @@ uv run python -m cli.run --no-wait
 
 Open the approval link printed in the terminal to approve/reject as the CFO.
 
-### 3. Run the agent via Python runner (requires API key)
+### 3. Run the CLI with a real agent (`--live` mode, requires API key)
+
+Same Rich terminal UI, but powered by the real Antigravity agent making real decisions and calling RevMem tools.
+
+**Terminal 1** — start the approval endpoint + ngrok:
+```bash
+uv run uvicorn notify.approve:app --port 8000
+# In another terminal:
+ngrok http 8000 --domain=<your-reserved>.ngrok.app
+```
+
+**Terminal 2** — run the live CLI:
+```bash
+export GEMINI_API_KEY=...
+export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+
+# Session 3 (default — ANALYST tier, approval gate)
+uv run python -m cli.run --live
+
+# Specific session
+uv run python -m cli.run --live --session 1
+
+# Skip approval polling
+uv run python -m cli.run --live --no-wait
+```
+
+This is the recommended demo mode — the agent's tool calls, memory retrieval, and routing decisions render through the same Rich panels as scaffold mode, but the decisions are real.
+
+### 4. Run the agent via Python runner (raw output, requires API key)
 
 ```bash
 export GEMINI_API_KEY=...
