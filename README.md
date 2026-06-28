@@ -80,6 +80,8 @@ Same Rich terminal UI, but powered by the real Antigravity agent making real dec
 `REVMEM_BASE_URL` points at a running RevMem API. Use `--allow-stub-live`
 only for explicit offline diagnostics.
 
+Approval claims in final text are not treated as approval evidence. A compliant live run must either call `route_for_approval` directly or attempt a governed tool such as `write_crm` so the pre-tool-use hook can route approval before execution.
+
 **Terminal 1** — start the RevMem API + ngrok:
 
 ```bash
@@ -183,6 +185,8 @@ antigravity
 │   ├── demo.py         # Run all 3 sessions sequentially
 │   ├── scenarios.py    # Acme / Globex deal configs + expected outcomes
 │   ├── tools.py        # Tool definitions (tier-gated)
+│   ├── tool_policy.py  # Pre-tool-use approval and write-gate policy
+│   ├── tool_types.py   # Shared tool evidence types
 │   ├── prompts.py      # System prompts for reconciliation
 │   ├── revmem_client.py # HTTP client for RevMem API
 │   ├── templates/      # Reads .agents/ files, generates tier-scoped SKILL.md
@@ -208,7 +212,7 @@ antigravity
 ## Key Concepts
 
 - **Reputation tiers**: OBSERVER (0.0–0.3) → ANALYST (0.3–0.6) → AUTONOMOUS (0.6–1.0). Higher reputation = broader permissions.
-- **Approval gate**: Server-enforced — the agent cannot write CRM data without an approved record, regardless of its behavior.
+- **Approval gate**: Pre-tool-use and server-enforced. Before `write_crm` executes, the runner's tool hook checks tier, approval status, and discrepancy policy; if human approval is required, it calls `route_for_approval` and blocks the write until the approval is approved. The FastAPI server remains the final enforcement boundary.
 - **Continual learning**: The agent learns from its own mistakes via experiential memories, retrieved by embedding-cosine similarity and reranked by reputation-weighted relevance.
 
 ## License
