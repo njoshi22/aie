@@ -626,11 +626,112 @@ def run_live_repeat(
     return results
 
 
+# --- Continuous mode (one interaction chain with human feedback) ---------------
+
+def run_continuous(
+    wait: bool = True,
+    approval_timeout: float | None = None,
+    approval_interval: float | None = None,
+    agent_name: str = LIVE_AGENT_NAME,
+    debug: bool = False,
+) -> list[dict]:
+    """Run a continuous interaction chain: Acme → human feedback → Globex.
+
+    All interactions share one environment_id. The human types real corrections
+    between deals, and the agent autonomously calls store_memory.
+    """
+    from agent.runner import run_session, send_feedback
+
+    console.print()
+    console.print(render.divider("RevMem Continuous Demo — live human correction"))
+
+    listener = RichListener(
+        wait_for_approvals=wait,
+        approval_timeout=approval_timeout,
+        approval_interval=approval_interval,
+    )
+
+    # --- Step 1: Run Acme (session 1) — agent has no memories, may make judgment errors
+    console.print(render.divider("Step 1: Acme Corp — no prior memories"))
+    result_s1 = run_session(
+        session_number=1,
+        listener=listener,
+        agent_name=agent_name,
+        debug=debug,
+    )
+
+    env_id = result_s1["environment_id"]
+    prev_interaction = result_s1["interaction_id"]
+    agent_id = result_s1["agent_id"]
+    session_id = result_s1["session_id"]
+
+    # --- Step 2: Collect human feedback
+    console.print(render.divider("Step 2: Human reviewer feedback"))
+    console.print()
+    console.print(
+        render.step(
+            "Review the agent's analysis above",
+            "What did it get wrong? Type your correction below.",
+            status="warn",
+        )
+    )
+    console.print()
+    feedback = console.input("[bold yellow]Your feedback:[/] ")
+    if not feedback.strip():
+        feedback = (
+            "The $0.33 monthly invoice difference is a rounding artifact — "
+            "per DOA-001, differences under $1 should be auto-dismissed, not escalated. "
+            "Also, the annual schedule mismatch is a schedule_change and should be "
+            "routed to the Controller per DOA-003, not the CFO."
+        )
+        console.print(f"[grey50](using default feedback: {feedback})[/]")
+
+    console.print()
+    console.print(render.step("Sending feedback to agent...", status="run"))
+
+    feedback_result = send_feedback(
+        feedback_text=feedback,
+        env_id=env_id,
+        prev_interaction_id=prev_interaction,
+        agent_id=agent_id,
+        session_id=session_id,
+        listener=listener,
+        debug=debug,
+    )
+
+    if feedback_result.get("memory_stored"):
+        console.print(render.step("Agent stored lesson via store_memory", status="ok"))
+    else:
+        console.print(render.step("Agent did NOT call store_memory", "lesson may not persist", status="warn"))
+
+    prev_interaction = feedback_result["interaction_id"]
+    env_id = feedback_result["environment_id"]
+
+    # --- Step 3: Run Globex (session 3) — agent should retrieve lesson and generalize
+    console.print(render.divider("Step 3: Globex Inc — testing generalization"))
+    result_s3 = run_session(
+        session_number=3,
+        env_id=env_id,
+        prev_interaction_id=prev_interaction,
+        listener=listener,
+        agent_name=agent_name,
+        debug=debug,
+    )
+
+    # --- Summary
+    results = [result_s1, result_s3]
+    console.print()
+    console.print(render.run_summary_table(results))
+    console.print()
+    return results
+
+
 # --- Entry point --------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RevMem agent-working CLI.")
     parser.add_argument("--live", action="store_true", help="real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)")
+    parser.add_argument("--continuous", action="store_true", help="continuous interaction chain with live human feedback (requires GEMINI_API_KEY)")
     parser.add_argument("--all", action="store_true", help="run all 3 sessions (1->2->3) with env-ID threading")
     parser.add_argument("--runs", type=int, default=None, metavar="N", help="seed once, then run N learned trials")
     parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
@@ -648,9 +749,27 @@ def main() -> None:
     delay_scale = _resolve_delay_scale(fast=fast)
     agent_name = args.agent_name
     if agent_name is None:
-        agent_name = LIVE_AGENT_NAME if args.reuse_agent or not (args.all or args.runs) else _fresh_agent_name()
+        agent_name = LIVE_AGENT_NAME if args.reuse_agent or not (args.all or args.runs or args.continuous) else _fresh_agent_name()
 
-    if args.live:
+    if args.continuous:
+        from agent import revmem_client
+
+        error = live_runtime_error(
+            stub_mode=revmem_client.STUB_MODE,
+            base_url=revmem_client.REVMEM_BASE_URL,
+            allow_stub_live=args.allow_stub_live,
+        )
+        if error:
+            parser.error(error)
+
+        run_continuous(
+            wait=wait,
+            approval_timeout=args.approval_timeout,
+            approval_interval=args.approval_interval,
+            agent_name=agent_name,
+            debug=args.debug_agent,
+        )
+    elif args.live:
         from agent import revmem_client
 
         error = live_runtime_error(

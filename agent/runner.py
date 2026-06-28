@@ -14,7 +14,7 @@ from google import genai
 
 from agent.templates.agents_md import AGENTS_MD
 from agent.templates.skill_md import generate_skill_md
-from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
+from agent.prompts import build_reconciliation_prompt, build_feedback_prompt
 from agent.scenarios import SCENARIOS
 from agent.tool_policy import ToolUseRequest, before_tool_use
 from agent.tool_types import JsonObject, ToolCallRecord
@@ -387,24 +387,20 @@ def run_session(
     memories_used_ids: list[str] = []
     prefetched_memories: list[dict] = []
 
-    if scenario["prompt_style"] != "cold_start":
-        query = _memory_query_for_scenario(scenario)
-        _notify(active_listener, "on_tool_call", "retrieve_context", {"query": query, "mode": "prefetch"})
-        tool_started = time.perf_counter()
-        bundle = revmem_client.retrieve_context(agent_id, query)
-        prefetched_memories = bundle.get("memories", []) if isinstance(bundle, dict) else bundle
-        _notify(active_listener, "on_tool_timing", "retrieve_context", time.perf_counter() - tool_started)
-        _notify(active_listener, "on_memory_retrieved", prefetched_memories)
-        memories_used = len(prefetched_memories)
-        memories_used_ids.extend(
-            str(m["id"]) for m in prefetched_memories
-            if isinstance(m, dict) and m.get("id")
-        )
+    query = _memory_query_for_scenario(scenario)
+    _notify(active_listener, "on_tool_call", "retrieve_context", {"query": query, "mode": "prefetch"})
+    tool_started = time.perf_counter()
+    bundle = revmem_client.retrieve_context(agent_id, query)
+    prefetched_memories = bundle.get("memories", []) if isinstance(bundle, dict) else bundle
+    _notify(active_listener, "on_tool_timing", "retrieve_context", time.perf_counter() - tool_started)
+    _notify(active_listener, "on_memory_retrieved", prefetched_memories)
+    memories_used = len(prefetched_memories)
+    memories_used_ids.extend(
+        str(m["id"]) for m in prefetched_memories
+        if isinstance(m, dict) and m.get("id")
+    )
 
-    if scenario["prompt_style"] == "cold_start":
-        prompt = build_cold_start_prompt(contract, crm)
-    else:
-        prompt = build_reconciliation_prompt(contract, crm, policy, prefetched_memories, tier)
+    prompt = build_reconciliation_prompt(contract, crm, policy, prefetched_memories, tier)
 
     skill_content = generate_skill_md(tier)
     tools = get_tools_for_tier(tier)
@@ -591,6 +587,104 @@ def run_session(
     _notify(active_listener, "on_session_end", result)
 
     return result
+
+
+def send_feedback(
+    feedback_text: str,
+    env_id: str,
+    prev_interaction_id: str,
+    agent_id: str,
+    session_id: str,
+    listener: RunnerListener | None = None,
+    debug: bool = False,
+) -> JsonObject:
+    """Send human feedback as a new interaction in the same chain.
+
+    The agent receives the feedback and is expected to call store_memory
+    autonomously to persist the lesson.
+    """
+    active_listener: RunnerListener = listener if listener is not None else _PrintListener()
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+    agent_state = revmem_client.ensure_agent(AGENT_NAME)
+    tier = str(agent_state["permission_tier"])
+    tools = get_tools_for_tier(tier)
+    prompt = build_feedback_prompt(feedback_text)
+
+    _ENV_FILES.clear()
+    skill_content = generate_skill_md(tier)
+    for target, content in [
+        (".agents/AGENTS.md", AGENTS_MD),
+        (".agents/skills/reconciliation/SKILL.md", skill_content),
+    ]:
+        _ENV_FILES[target] = content
+
+    create_kwargs: dict[str, Any] = {
+        "agent": AGENT_MODEL,
+        "input": prompt,
+        "tools": tools,
+        "environment": env_id,
+        "previous_interaction_id": prev_interaction_id,
+    }
+
+    interaction = _create_interaction(client, create_kwargs, "feedback response", active_listener, debug)
+    tool_calls_made: list[ToolCallRecord] = []
+    approval_client = _RevMemApprovalClient()
+
+    max_tool_rounds = 8
+    for round_num in range(max_tool_rounds):
+        if interaction.status != "requires_action":
+            break
+
+        all_steps = [s.to_dict() for s in interaction.steps]
+        resolved_tools = {s.get("name") for s in all_steps if s.get("type") == "function_result"}
+        fc_steps = [s for s in all_steps if s.get("type") == "function_call" and s.get("name") not in resolved_tools]
+        if not fc_steps:
+            break
+
+        results = []
+        for fc in fc_steps:
+            tool_name = fc["name"]
+            tool_args = fc.get("arguments", {})
+            tool_args = tool_args if isinstance(tool_args, dict) else {}
+            _notify(active_listener, "on_tool_call", tool_name, tool_args)
+
+            hook_decision = before_tool_use(
+                ToolUseRequest(name=tool_name, arguments=tool_args, agent_id=agent_id, session_id=session_id, tier=tier),
+                approval_client,
+            )
+            for record in hook_decision.tool_records:
+                tool_calls_made.append(record)
+
+            if hook_decision.allow:
+                tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
+            else:
+                tool_result = hook_decision.result or {"error": f"{tool_name} blocked", "skipped": True}
+
+            tool_calls_made.append({"name": tool_name, "arguments": tool_args, "result": tool_result, "source": "model"})
+            _notify(active_listener, "on_tool_result", tool_name, tool_result)
+
+            results.append({"type": "function_result", "call_id": fc["id"], "name": tool_name, "result": tool_result})
+
+        interaction = _create_interaction(
+            client,
+            {"agent": AGENT_MODEL, "previous_interaction_id": interaction.id, "environment": interaction.environment_id, "input": results},
+            "after feedback tools",
+            active_listener,
+            debug,
+        )
+
+    output = interaction.output_text or "(no text output)"
+    _notify(active_listener, "on_agent_response", output)
+
+    stored = any(c["name"] == "store_memory" for c in tool_calls_made)
+    return {
+        "interaction_id": interaction.id,
+        "environment_id": interaction.environment_id,
+        "agent_output": output,
+        "tool_calls": tool_calls_made,
+        "memory_stored": stored,
+    }
 
 
 def main():
