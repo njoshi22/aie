@@ -22,7 +22,9 @@ def load_contract(deal_id: str) -> dict[str, Any] | None:
 def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent") -> Agent:
     # policy (replace existing so re-seed is idempotent)
     conn.execute("DELETE FROM policy_rules")
-    for raw in _load("policy.json"):
+    raw_policy = _load("policy.json")
+    rules = raw_policy["rules"] if isinstance(raw_policy, dict) else raw_policy
+    for raw in rules:
         database.upsert_policy(conn, PolicyRule(**raw))
     # crm (mutable copy of the stale Salesforce state)
     for deal_id, record in _load("salesforce.json").items():

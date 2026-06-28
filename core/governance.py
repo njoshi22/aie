@@ -13,22 +13,33 @@ TOOLS_BY_TIER: dict[str, set[str]] = {
 }
 
 
+def _numeric_ok(condition: dict[str, Any], amount: float) -> bool:
+    min_value = condition.get("min_diff_usd", condition.get("min_usd", 0))
+    max_value = condition.get("max_diff_usd", condition.get("max_usd"))
+    if amount < float(min_value or 0):
+        return False
+    if max_value is not None and amount > float(max_value):
+        return False
+    return True
+
+
+def _route_to(rule: PolicyRule) -> str:
+    return rule.route_to or "none"
+
+
 def route(discrepancy: dict[str, Any], rules: list[PolicyRule]) -> str:
     change_type = discrepancy.get("change_type")
     amount = abs(float(discrepancy.get("amount_usd", 0)))
-    # 1) change-type overrides (material structural changes ignore amount)
+    # 1) categorical rules first, so discount authority is not swallowed by amount.
     for r in rules:
-        if change_type and change_type in r.condition.get("change_types", []):
-            return r.route_to
-    # 2) amount bands (rules without change_types)
+        if change_type and change_type in r.condition.get("change_types", []) and _numeric_ok(r.condition, amount):
+            return _route_to(r)
+    # 2) numeric-only amount bands.
     for r in rules:
-        cond = r.condition
-        if cond.get("change_types"):
+        if r.condition.get("change_types"):
             continue
-        lo = float(cond.get("min_usd", 0))
-        hi = cond.get("max_usd")
-        if amount >= lo and (hi is None or amount < float(hi)):
-            return r.route_to
+        if _numeric_ok(r.condition, amount):
+            return _route_to(r)
     return "cfo"
 
 

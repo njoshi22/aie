@@ -12,8 +12,8 @@ Run:
     uv run python -m cli.run                       # scaffold S3 with live approval
     uv run python -m cli.run --session s1          # scaffold S1 cold start
 
-For the live approval gate, also run the approval endpoint:
-    uv run uvicorn notify.approve:app --port 8000
+For the live approval gate, also run the RevMem API:
+    uv run uvicorn api.main:app --port 8000
 """
 
 from __future__ import annotations
@@ -23,22 +23,47 @@ from datetime import datetime, timezone
 import json
 import os
 import time
+from typing import Any, NotRequired, TypedDict, cast
 
 from dotenv import load_dotenv
-load_dotenv()
-
 from rich.console import Console
 
 from cli import render
-from notify import email
-from notify.approve import create_approval, wait_for_approval
+
+load_dotenv()
 
 console = Console()
 LIVE_AGENT_NAME = "RevOps Finance Agent"
+JsonObject = dict[str, Any]
+
+
+class DiffField(TypedDict):
+    field: str
+    contract: str
+    crm: str
+    verdict: str
+
+
+class ScaffoldScenario(TypedDict, total=False):
+    session_name: str
+    deal_id: str
+    task: str
+    fields: list[DiffField]
+    rep_before: float
+    rep_after: float
+    tier: str
+    memory: str | None
+    needs_approval: bool
+    outcome: dict[str, object]
+    discrepancy: NotRequired[str]
+    recommended_fix: NotRequired[str]
+    amount_usd: NotRequired[float]
+    approver_role: NotRequired[str]
+    approver_email: NotRequired[str]
 
 # --- Mock scenario data (scaffold mode) --------------------------------------
 
-ACME_FIELDS = [
+ACME_FIELDS: list[DiffField] = [
     {"field": "Seats", "contract": "1,000", "crm": "1,000", "verdict": "match"},
     {"field": "TCV", "contract": "$450,000", "crm": "$450,000", "verdict": "match"},
     {"field": "Annual schedule", "contract": "$100k / $150k / $200k", "crm": "$150k / $150k / $150k", "verdict": "material"},
@@ -46,7 +71,7 @@ ACME_FIELDS = [
     {"field": "Y1 monthly invoice", "contract": "$8,333.33", "crm": "$8,333.00", "verdict": "immaterial"},
 ]
 
-SCAFFOLD_SCENARIOS = {
+SCAFFOLD_SCENARIOS: dict[str, ScaffoldScenario] = {
     "s1": {
         "session_name": "Session 1 - cold start",
         "deal_id": "ACME-2026",
@@ -144,6 +169,26 @@ def tier_for(score: float) -> str:
     return "observer" if score < 0.3 else "analyst" if score < 0.6 else "autonomous"
 
 
+def wait_for_revmem_approval(approval_id: str, timeout: float = 300.0, interval: float = 2.0) -> JsonObject:
+    from agent import revmem_client
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = revmem_client.get_approval_status(approval_id)
+        if status.get("status") != "pending":
+            return status
+        time.sleep(interval)
+    raise TimeoutError(f"approval {approval_id} not decided within {timeout:.0f}s")
+
+
+def approval_link_location_detail() -> str:
+    from agent import revmem_client
+
+    if revmem_client.STUB_MODE:
+        return "Offline stub mode: no clickable approval link is created. Set REVMEM_BASE_URL and run api.main for real approval links."
+    return "Human approval link is printed by the RevMem API server logs."
+
+
 # --- Scaffold mode ------------------------------------------------------------
 
 def run_scaffold(
@@ -169,7 +214,7 @@ def run_scaffold(
     _beat(delay_scale=delay_scale)
 
     console.print()
-    console.print(render.diff_table(sc["fields"]))
+    console.print(render.diff_table(cast(list[dict[str, str]], sc["fields"])))
     console.print()
 
     for f in sc["fields"]:
@@ -198,29 +243,36 @@ def run_scaffold(
     approver_label = approver_role.replace("_", " + ").upper()
     console.print(render.routing_panel(sc["discrepancy"], approver_label, sc["recommended_fix"]))
 
-    approval = create_approval(
+    from agent import revmem_client
+
+    approval = revmem_client.route_for_approval(
         deal_id=sc["deal_id"],
-        approver_email=sc["approver_email"],
-        discrepancy=sc["discrepancy"],
+        amount_usd=float(sc.get("amount_usd", 0)),
+        change_type="schedule_change",
+        summary=sc["discrepancy"],
         recommended_fix=sc["recommended_fix"],
-        amount_usd=sc.get("amount_usd"),
-        approver_role=approver_role,
     )
-    email.send_approval_email(approval)
-    console.print(render.approval_request_panel(sc["approver_email"], approval.approve_url(), waiting=wait))
+    approval_id = str(approval.get("approval_id", ""))
+    link = str(approval.get("approval_link", ""))
+    route = str(approval.get("route_to", sc["approver_email"]))
+    if link:
+        console.print(render.approval_request_panel(route, link))
+    else:
+        console.print(render.step("Approval requested", approval_link_location_detail(), status="warn"))
 
     if not wait:
-        console.print(
-            f"\n[grey70]Approval wait disabled: approve at the link above, confirm with"
-            f"\n  curl -s {approval.status_url()}"
-            f"\nThis run will not resume (re-running mints a new approval). Use the default mode for the full gate.[/]\n"
-        )
+        detail = f"approval_id={approval_id}" if approval_id else "approval_id unavailable"
+        console.print(f"\n[grey70]--no-wait: {detail}. This run will not resume.[/]\n")
+        return
+
+    if not approval_id:
+        console.print("\n[red]Approval request did not return an approval_id - leaving CRM unchanged.[/]\n")
         return
 
     try:
         with console.status(f"[yellow]waiting for {approver_label} approval...[/]", spinner="dots"):
-            decided = wait_for_approval(
-                approval.id,
+            decided = wait_for_revmem_approval(
+                approval_id,
                 timeout=_resolve_approval_timeout(approval_timeout),
                 interval=_resolve_approval_interval(approval_interval),
             )
@@ -228,7 +280,7 @@ def run_scaffold(
         console.print("\n[red]Approval timed out - leaving CRM unchanged.[/]\n")
         return
 
-    if decided.status == "approved":
+    if decided.get("status") == "approved":
         console.print(render.step(f"{approver_label} approved", status="ok"))
         _beat(delay_scale=delay_scale)
         console.print(render.step(f"write_crm({sc['deal_id']}, corrected_fields)", "ANALYST permission - executed", status="ok"))
@@ -288,7 +340,6 @@ class RichListener:
     def on_agent_response(self, text):
         console.print()
         console.print(render.step("Agent analysis complete", status="ok"))
-        # Try to extract and render the diff table from agent JSON output
         fields = _parse_fields_from_output(text)
         if fields:
             console.print()
@@ -305,23 +356,7 @@ class RichListener:
             approval.get("summary", ""),
         ))
         if link:
-            console.print(render.approval_request_panel(route, link, waiting=self._wait))
-            if self._wait:
-                approval_id = approval.get("approval_id", "")
-                if approval_id:
-                    try:
-                        with console.status("[yellow]waiting for approval...[/]", spinner="dots"):
-                            decided = wait_for_approval(
-                                approval_id,
-                                timeout=_resolve_approval_timeout(self._approval_timeout),
-                                interval=_resolve_approval_interval(self._approval_interval),
-                            )
-                        if decided.status == "approved":
-                            console.print(render.step("Approved", status="ok"))
-                        else:
-                            console.print(render.step("Rejected", "CRM left unchanged", status="warn"))
-                    except TimeoutError:
-                        console.print(render.step("Approval timed out", status="err"))
+            console.print(render.approval_request_panel(route, link))
         else:
             console.print(
                 render.step(
@@ -330,6 +365,22 @@ class RichListener:
                     status="warn",
                 )
             )
+        if self._wait:
+            approval_id = str(approval.get("approval_id", ""))
+            if approval_id:
+                try:
+                    with console.status("[yellow]waiting for approval...[/]", spinner="dots"):
+                        decided = wait_for_revmem_approval(
+                            approval_id,
+                            timeout=_resolve_approval_timeout(self._approval_timeout),
+                            interval=_resolve_approval_interval(self._approval_interval),
+                        )
+                    if decided.get("status") == "approved":
+                        console.print(render.step("Approved", status="ok"))
+                    else:
+                        console.print(render.step("Rejected", "CRM left unchanged", status="warn"))
+                except TimeoutError:
+                    console.print(render.step("Approval timed out", status="err"))
 
     def on_graded(self, scorecard, graded_from_output):
         source = "agent output" if graded_from_output else "modeled fallback"
@@ -342,7 +393,6 @@ class RichListener:
     def on_session_end(self, result):
         rep = result.get("reputation", 0)
         tier = tier_for(rep)
-        # Fetch updated reputation after session completion
         from agent import revmem_client
         try:
             updated = revmem_client.get_agent(result.get("agent_id", ""))
@@ -369,7 +419,6 @@ class RichListener:
 def _parse_fields_from_output(text: str) -> list[dict] | None:
     """Try to extract fields_compared from agent JSON output for the diff table."""
     import re
-    # Find JSON object in the output
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     blob = fenced.group(1) if fenced else None
     if not blob:
@@ -450,7 +499,7 @@ def run_live_all(
     agent_name: str = LIVE_AGENT_NAME,
     debug: bool = False,
 ) -> list[dict]:
-    """Run sessions 1→2→3 with env-ID threading — the full demo narrative."""
+    """Run sessions 1->2->3 with env-ID threading -- the full demo narrative."""
     console.print()
     console.print(render.divider("RevMem Demo — 3 sessions, continual learning"))
 
@@ -504,7 +553,7 @@ def run_live_repeat(
     results = []
     env_id = None
     prev_interaction = None
-    sequence = [(1, "Seed 1/2"), (2, "Seed 2/2")]
+    sequence: list[tuple[int, str]] = [(1, "Seed 1/2"), (2, "Seed 2/2")]
     sequence.extend((3, f"Run {i}/{runs}") for i in range(1, runs + 1))
 
     for index, (session_num, label) in enumerate(sequence, start=1):
@@ -537,7 +586,7 @@ def run_live_repeat(
 def main() -> None:
     parser = argparse.ArgumentParser(description="RevMem agent-working CLI.")
     parser.add_argument("--live", action="store_true", help="real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)")
-    parser.add_argument("--all", action="store_true", help="run all 3 sessions (1→2→3) with env-ID threading")
+    parser.add_argument("--all", action="store_true", help="run all 3 sessions (1->2->3) with env-ID threading")
     parser.add_argument("--runs", type=int, default=None, metavar="N", help="seed once, then run N learned trials")
     parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
     parser.add_argument("--no-wait", action="store_true", help="skip approval polling")

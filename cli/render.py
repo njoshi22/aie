@@ -100,7 +100,7 @@ def routing_panel(discrepancy: str, approver: str, recommended_fix: str | None =
 
 def approval_request_panel(approver_email: str, approve_url: str, waiting: bool = True) -> Panel:
     body = Text()
-    body.append("email sent to  ", style="bold")
+    body.append("approval target  ", style="bold")
     body.append(f"{approver_email}\n", style="green")
     if waiting:
         body.append("waiting for human sign-off...\n\n", style="yellow")

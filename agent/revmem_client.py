@@ -9,27 +9,38 @@ Endpoints (no ``/api`` prefix — see the Person B plan / ARCHITECTURE.md):
     POST /memory                           -> memory
     GET  /contracts/{deal_id}              -> signed order form
     GET  /crm/{deal_id}                    -> CRM record
-    POST /route_for_approval               -> {approval_id, token, route_to, ...}
+    POST /route_for_approval               -> {approval_id, route_to, status, ...}
     GET  /approvals/{id}/status            -> approval status (poll target)
     POST /crm/write                        -> {ok, decision, crm}  (or 403)
 
-Until the API is live, every call falls back to a hardcoded stub. Point the agent
-at the real service with ``REVMEM_BASE_URL`` (the ngrok URL).
+Calls use hardcoded stubs only when ``REVMEM_BASE_URL`` is unset or
+``REVMEM_STUB_MODE=1``. With a base URL configured, transport failures raise
+``RevMemApiError`` instead of silently falling back.
 """
 
 import json
 import os
+from typing import Any
 import urllib.error
 import urllib.request
 from urllib.parse import quote, urlencode
 
-REVMEM_BASE_URL = os.environ.get("REVMEM_BASE_URL", os.environ.get("REVMEM_API_URL", ""))
-STUB_MODE = not REVMEM_BASE_URL
+JsonObject = dict[str, Any]
+JsonValue = JsonObject | list[Any]
+
+REVMEM_BASE_URL = os.environ.get("REVMEM_BASE_URL", os.environ.get("REVMEM_API_URL", "")).rstrip("/")
+STUB_MODE = os.environ.get("REVMEM_STUB_MODE") == "1" or not REVMEM_BASE_URL
 
 _HEADERS = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "1"}
 
 
-def _api_call(method: str, path: str, body: dict | None = None) -> dict | list:
+class RevMemApiError(RuntimeError):
+    """Raised when the live RevMem API cannot fulfill a request."""
+
+    pass
+
+
+def _api_call(method: str, path: str, body: JsonObject | None = None) -> JsonValue:
     if STUB_MODE:
         return _stub_response(method, path, body)
 
@@ -37,28 +48,33 @@ def _api_call(method: str, path: str, body: dict | None = None) -> dict | list:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=_HEADERS, method=method)
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
-        print(f"[RevMem API error] {method} {path}: {e.code} {e.reason}")
-        return _stub_response(method, path, body)
+        raise RevMemApiError(f"{method} {path} failed: {e.code} {e.reason}") from e
     except urllib.error.URLError as e:
-        print(f"[RevMem API error] {method} {path}: {e}")
-        return _stub_response(method, path, body)
+        raise RevMemApiError(f"{method} {path} failed: {e.reason}") from e
+
+
+def _expect_object(value: JsonValue, path: str) -> JsonObject:
+    if isinstance(value, dict):
+        return value
+    raise RevMemApiError(f"{path} returned a list, expected object")
 
 
 # --- Agent / session ----------------------------------------------------------
 
-def get_agent(agent_id: str) -> dict:
-    return _api_call("GET", f"/agents/{quote(agent_id)}")
+def get_agent(agent_id: str) -> JsonObject:
+    path = f"/agents/{quote(agent_id)}"
+    return _expect_object(_api_call("GET", path), path)
 
 
-def ensure_agent(name: str) -> dict:
+def ensure_agent(name: str) -> JsonObject:
     """Get-or-create the demo agent by name (idempotent). Returns the agent dict —
     the existing agent if one with this name exists, else a freshly created one.
     Lets each per-session run resolve the same agent and accumulate reputation."""
-    return _api_call("POST", "/agents", {"name": name})
+    return _expect_object(_api_call("POST", "/agents", {"name": name}), "/agents")
 
 
 def get_skill_md(agent_id: str) -> str:
@@ -68,27 +84,29 @@ def get_skill_md(agent_id: str) -> str:
     url = f"{REVMEM_BASE_URL}/agents/{quote(agent_id)}/skill.md"
     req = urllib.request.Request(url, headers={"ngrok-skip-browser-warning": "1"})
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read().decode()
+    except urllib.error.HTTPError as e:
+        raise RevMemApiError(f"GET /agents/{agent_id}/skill.md failed: {e.code} {e.reason}") from e
     except urllib.error.URLError as e:
-        print(f"[RevMem API error] GET /agents/{agent_id}/skill.md: {e}")
-        return ""
+        raise RevMemApiError(f"GET /agents/{agent_id}/skill.md failed: {e.reason}") from e
 
 
-def start_session(agent_id: str, task: str, env_id: str | None = None) -> dict:
-    body = {"agent_id": agent_id, "task": task}
+def start_session(agent_id: str, task: str, env_id: str | None = None) -> JsonObject:
+    body: JsonObject = {"agent_id": agent_id, "task": task}
     if env_id:
         body["env_id"] = env_id
-    return _api_call("POST", "/sessions", body)
+    return _expect_object(_api_call("POST", "/sessions", body), "/sessions")
 
 
-def complete_session(session_id: str, outcome: dict) -> dict:
+def complete_session(session_id: str, outcome: JsonObject) -> JsonObject:
     """Close the session → RevMem updates reputation + memory relevance.
 
     ``outcome`` must include ``accuracy`` (float); may include ``memories_used`` /
     ``memories_created`` and any extra metrics (material_caught, false_escalations).
     Returns ``{"session": ..., "agent": ...}``."""
-    return _api_call("POST", f"/sessions/{quote(session_id)}/complete", outcome)
+    path = f"/sessions/{quote(session_id)}/complete"
+    return _expect_object(_api_call("POST", path, outcome), path)
 
 
 # Back-compat alias for callers that say "log the outcome".
@@ -99,83 +117,95 @@ log_outcome = complete_session
 
 def retrieve_context(
     agent_id: str, query: str, memory_type: str | None = None, limit: int = 5
-) -> list[dict]:
-    """Reputation-reranked memories for this agent + query. Returns a list."""
+) -> JsonObject:
+    """Reputation-reranked memories plus the active policy for this query."""
     params = {"agent_id": agent_id, "query": query, "limit": limit}
     if memory_type:
         params["type"] = memory_type
     result = _api_call("GET", f"/memory/retrieve?{urlencode(params)}")
     if isinstance(result, list):
-        return result
-    return result.get("memories", [])  # tolerate a {"memories": [...]} wrapper
+        return {"memories": result, "policy": []}
+    return result
 
 
 def store_memory(
-    session_id: str, agent_id: str, memory_type: str, content: str, metadata: dict
-) -> dict:
-    return _api_call(
-        "POST",
+    session_id: str, agent_id: str, memory_type: str, content: str, metadata: JsonObject
+) -> JsonObject:
+    return _expect_object(
+        _api_call(
+            "POST",
+            "/memory",
+            {
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "type": memory_type,
+                "content": content,
+                "metadata": metadata,
+            },
+        ),
         "/memory",
-        {
-            "session_id": session_id,
-            "agent_id": agent_id,
-            "type": memory_type,
-            "content": content,
-            "metadata": metadata,
-        },
     )
 
 
 # --- Reconciliation tools -----------------------------------------------------
 
-def get_contract(deal_id: str) -> dict:
-    return _api_call("GET", f"/contracts/{quote(deal_id)}")
+def get_contract(deal_id: str) -> JsonObject:
+    path = f"/contracts/{quote(deal_id)}"
+    return _expect_object(_api_call("GET", path), path)
 
 
-def get_crm_record(deal_id: str) -> dict:
-    return _api_call("GET", f"/crm/{quote(deal_id)}")
+def get_crm_record(deal_id: str) -> JsonObject:
+    path = f"/crm/{quote(deal_id)}"
+    return _expect_object(_api_call("GET", path), path)
 
 
 def route_for_approval(
-    deal_id: str, amount_usd: float, change_type: str, **extra
-) -> dict:
-    """Route a discrepancy for approval. Returns {approval_id, token, route_to,
-    status, approval_link}. ``extra`` may carry summary/recommended_fix/approver_email."""
-    body = {"deal_id": deal_id, "amount_usd": amount_usd, "change_type": change_type}
+    deal_id: str, amount_usd: float, change_type: str, **extra: Any
+) -> JsonObject:
+    """Route a discrepancy for approval.
+
+    The canonical API returns approval_id, route_to, and status. It does not
+    return the human approval token or link to the agent.
+    """
+    body: JsonObject = {"deal_id": deal_id, "amount_usd": amount_usd, "change_type": change_type}
     body.update(extra)
-    return _api_call("POST", "/route_for_approval", body)
+    return _expect_object(_api_call("POST", "/route_for_approval", body), "/route_for_approval")
 
 
-def get_approval_status(approval_id: str) -> dict:
+def get_approval_status(approval_id: str) -> JsonObject:
     """Poll target between route_for_approval and write_crm."""
-    return _api_call("GET", f"/approvals/{quote(approval_id)}/status")
+    path = f"/approvals/{quote(approval_id)}/status"
+    return _expect_object(_api_call("GET", path), path)
 
 
 def write_crm(
     agent_id: str,
     deal_id: str,
-    fields: dict,
-    discrepancy: dict | None = None,
+    fields: JsonObject,
+    discrepancy: JsonObject | None = None,
     approval_id: str | None = None,
-) -> dict:
+) -> JsonObject:
     """Reconcile CRM to the signed contract. Server-gated by authorize_write —
     returns {ok, decision, crm} on ALLOW, otherwise an HTTP 403 (stubbed allow)."""
-    return _api_call(
-        "POST",
+    return _expect_object(
+        _api_call(
+            "POST",
+            "/crm/write",
+            {
+                "agent_id": agent_id,
+                "deal_id": deal_id,
+                "fields": fields,
+                "discrepancy": discrepancy or {},
+                "approval_id": approval_id,
+            },
+        ),
         "/crm/write",
-        {
-            "agent_id": agent_id,
-            "deal_id": deal_id,
-            "fields": fields,
-            "discrepancy": discrepancy or {},
-            "approval_id": approval_id,
-        },
     )
 
 
 # --- Stub responses (no API yet) ----------------------------------------------
 
-def _stub_agent(agent_id: str) -> dict:
+def _stub_agent(agent_id: str) -> JsonObject:
     return {
         "id": agent_id,
         "name": "RevOps Finance Agent",
@@ -190,7 +220,7 @@ def _stub_agent(agent_id: str) -> dict:
     }
 
 
-def _stub_response(method: str, path: str, body: dict | None = None) -> dict | list:
+def _stub_response(method: str, path: str, body: JsonObject | None = None) -> JsonValue:
     """Hardcoded responses mirroring the canonical contract for offline dev."""
     if path == "/agents":  # register: get-or-create by name
         return _stub_agent("revops-agent-1")
@@ -219,10 +249,10 @@ def _stub_response(method: str, path: str, body: dict | None = None) -> dict | l
         return {"deal_id": path.rsplit("/", 1)[-1]}
 
     if path == "/route_for_approval":
-        return {"approval_id": "appr-stub-001", "token": "stub-token",
+        return {"approval_id": "appr-stub-001",
                 "route_to": (body or {}).get("change_type") == "discount_over_authority"
-                and "cfo" or "controller",
-                "status": "pending", "approval_link": "http://localhost:8000/approvals/appr-stub-001?token=stub-token"}
+                and "cfo_cco" or "controller",
+                "status": "pending"}
     if path.startswith("/approvals/") and path.endswith("/status"):
         return {"id": path.split("/")[2], "status": "approved"}  # stub auto-approves
 

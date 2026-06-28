@@ -1,6 +1,6 @@
 """Gold labels - the ground truth a session is graded against.
 
-Derived from the same ``agent/data`` files the agent sees, so labels never drift
+Derived from the canonical ``data`` files the API serves, so labels never drift
 from the demo data. For each comparable field we compute the contract-vs-CRM diff
 and classify it via the DOA policy:
 
@@ -18,11 +18,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parents[1] / "agent" / "data"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DEAL_DESK_MAX_DISCOUNT_PCT = 20  # contract discount above this exceeds authority
-
-# scenario deal name -> data file stem
-DEAL_FILES = {"acme": "acme", "globex": "globex"}
 
 
 @dataclass
@@ -38,11 +35,10 @@ class GoldItem:
 
 
 def _load(deal: str) -> tuple[dict, dict, dict]:
-    stem = DEAL_FILES[deal]
-    contract = json.loads((DATA_DIR / f"{stem}_contract.json").read_text())
-    crm = json.loads((DATA_DIR / f"{stem}_crm.json").read_text())
+    contracts = json.loads((DATA_DIR / "contracts.json").read_text())
+    crm_records = json.loads((DATA_DIR / "salesforce.json").read_text())
     policy = json.loads((DATA_DIR / "policy.json").read_text())
-    return contract, crm, policy
+    return contracts[deal], crm_records[deal], policy
 
 
 def _numeric_ok(cond: dict, diff_usd: float) -> bool:
@@ -112,7 +108,6 @@ def build_gold(deal: str) -> list[GoldItem]:
 
     # --- Discount: a mismatch AND/OR exceeding deal-desk authority.
     disc_c = contract.get("discount_pct")
-    disc_r = crm.get("discount_pct")
     if disc_c is not None and disc_c > DEAL_DESK_MAX_DISCOUNT_PCT:
         # Over-authority dominates: escalate regardless of the CRM value.
         add("discount_pct", "discount_over_authority", 0.0)

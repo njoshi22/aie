@@ -36,8 +36,8 @@ uv pip install -r requirements.txt
 cp .env.example .env
 # Edit .env and add your keys:
 #   GEMINI_API_KEY=...
-#   RESEND_API_KEY=...       (optional — omit for console dry-run)
-#   APPROVAL_BASE_URL=http://localhost:8000
+#   REVMEM_BASE_URL=http://localhost:8000
+#   REVMEM_STUB_MODE=0
 ```
 
 ## Local Testing
@@ -54,21 +54,15 @@ uv run python -m pytest evals/test_grade.py -v
 uv run python -m evals.run
 ```
 
-### 2. Run the CLI demo (scaffold mode, no API key)
+### 2. Run the CLI demo (offline scaffold, no API key)
 
 The CLI replays a reconciliation session with mock data and drives the approval gate.
 
-**Terminal 1** — start the approval endpoint:
-```bash
-uv run uvicorn notify.approve:app --port 8000
-```
-
-**Terminal 2** — run the CLI transcript:
 ```bash
 # Session 1 — cold start (no approval needed)
 uv run python -m cli.run --session s1
 
-# Session 3 — live approval flow (default)
+# Session 3 — scaffold approval flow (default)
 uv run python -m cli.run
 
 # Fast noninteractive scaffold check for local integration runs
@@ -83,22 +77,26 @@ Open the approval link printed in the terminal to approve/reject as the routed a
 `--fast` also skips the demo pacing sleeps; `REVMEM_CLI_FAST=1` enables the same
 mode for scripts. Use scaffold mode for quick local integration checks; `--live`
 still calls the hosted agent API, so model/network latency remains.
+For real approval polling, run the canonical API server and set `REVMEM_BASE_URL`.
 
 ### 3. Run the CLI with a real agent (`--live` mode, requires API key)
 
 Same Rich terminal UI, but powered by the real Antigravity agent making real decisions and calling RevMem tools.
 
-**Terminal 1** — start the approval endpoint + ngrok:
+**Terminal 1** — start the RevMem API + ngrok:
+
 ```bash
-uv run uvicorn notify.approve:app --port 8000
+uv run uvicorn api.main:app --port 8000
 # In another terminal:
 ngrok http 8000 --domain=<your-reserved>.ngrok.app
 ```
 
 **Terminal 2** — run the live CLI:
+
 ```bash
 export GEMINI_API_KEY=...
 export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+export REVMEM_STUB_MODE=0
 
 # Single session (default: session 3, ANALYST tier)
 uv run python -m cli.run --live
@@ -157,35 +155,39 @@ uv run python -m agent.runner --session 1
 uv run python -m agent.demo
 ```
 
-For the full flow with a live approval gate, also run the approval endpoint and expose it:
+For the full flow with a live approval gate, also run the canonical API server and expose it:
 
 ```bash
-# Terminal 1: approval + API server
-uv run uvicorn notify.approve:app --port 8000
+# Terminal 1: RevMem API server
+uv run uvicorn api.main:app --port 8000
 
 # Terminal 2: ngrok tunnel
 ngrok http 8000 --domain=<your-reserved>.ngrok.app
 
 # Terminal 3: agent (set the base URL to your tunnel)
 export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+export REVMEM_STUB_MODE=0
 uv run python -m agent.demo
 ```
 
-### 4. Run the agent via Antigravity CLI (interactive demo)
+### 5. Run the agent via Antigravity CLI (interactive demo)
 
 The Antigravity CLI can drive the same managed agent interactively. It reads the agent persona and skills from `.agents/` on disk, and the agent calls RevMem tools via the ngrok-exposed API — same tool call flow as the Python runner.
 
 **Terminal 1** — start RevMem API + ngrok:
+
 ```bash
-uv run uvicorn notify.approve:app --port 8000
+uv run uvicorn api.main:app --port 8000
 # In another terminal:
 ngrok http 8000 --domain=<your-reserved>.ngrok.app
 ```
 
 **Terminal 2** — launch Antigravity CLI:
+
 ```bash
 export GEMINI_API_KEY=...
 export REVMEM_BASE_URL=https://<your-reserved>.ngrok.app
+export REVMEM_STUB_MODE=0
 
 # Start an interactive session with the managed agent
 antigravity
@@ -197,6 +199,7 @@ antigravity
 ```
 
 **When to use which:**
+
 - **Python runner** (`agent.demo`): reproducible 3-session demo with auto-grading, best for recording or consistent demos
 - **Antigravity CLI**: interactive, visually impressive, great for live stage demos where you want to poke at the agent in real time
 
@@ -215,6 +218,9 @@ antigravity
 │   ├── revmem_client.py # HTTP client for RevMem API
 │   ├── templates/      # Reads .agents/ files, generates tier-scoped SKILL.md
 │   └── data/           # Mock contracts, CRM records, policy
+├── api/                # FastAPI app exposing the canonical RevMem contract
+├── core/               # SQLite-backed memory, policy, and governance logic
+├── data/               # Canonical demo seed data
 ├── cli/                # Rich terminal agent view (the demo's hero)
 │   ├── run.py          # Live transcript driver
 │   └── render.py       # Rich renderables (diff table, rep bar, routing)
@@ -226,9 +232,6 @@ antigravity
 │   ├── report.py       # CLI report renderer
 │   ├── run.py          # Entry point
 │   └── test_grade.py   # Unit tests for grading
-├── notify/             # Email + approval
-│   ├── email.py        # Resend email (+ console dry-run fallback)
-│   └── approve.py      # Scaffold approval endpoints (FastAPI)
 ├── requirements.txt
 └── .env.example
 ```

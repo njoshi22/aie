@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at TEXT, ended_at TEXT
 );
 CREATE TABLE IF NOT EXISTS policy_rules (
-  id TEXT PRIMARY KEY, description TEXT, condition TEXT, route_to TEXT, version INTEGER
+  id TEXT PRIMARY KEY, description TEXT, condition TEXT, route_to TEXT,
+  action TEXT, version INTEGER
 );
 CREATE TABLE IF NOT EXISTS crm_records (
   deal_id TEXT PRIMARY KEY, data TEXT
@@ -49,7 +50,14 @@ def get_connection(path: Path | str = DB_PATH) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_policy_action_column(conn)
     conn.commit()
+
+
+def _ensure_policy_action_column(conn: sqlite3.Connection) -> None:
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(policy_rules)").fetchall()}
+    if "action" not in cols:
+        conn.execute("ALTER TABLE policy_rules ADD COLUMN action TEXT DEFAULT 'escalate'")
 
 
 def _dt(value: str | None) -> datetime | None:
@@ -185,10 +193,12 @@ def list_sessions(conn: sqlite3.Connection, agent_id: str | None = None) -> list
 # --- policy ---
 def upsert_policy(conn: sqlite3.Connection, r: PolicyRule) -> None:
     conn.execute(
-        "INSERT INTO policy_rules VALUES (?,?,?,?,?) "
+        "INSERT INTO policy_rules (id, description, condition, route_to, action, version) "
+        "VALUES (?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET description=excluded.description,"
-        "condition=excluded.condition,route_to=excluded.route_to,version=excluded.version",
-        (r.id, r.description, json.dumps(r.condition), r.route_to, r.version),
+        "condition=excluded.condition,route_to=excluded.route_to,"
+        "action=excluded.action,version=excluded.version",
+        (r.id, r.description, json.dumps(r.condition), r.route_to, r.action, r.version),
     )
     conn.commit()
 
@@ -196,7 +206,7 @@ def upsert_policy(conn: sqlite3.Connection, r: PolicyRule) -> None:
 def _policy_from_row(row: sqlite3.Row) -> PolicyRule:
     return PolicyRule(id=row["id"], description=row["description"],
                       condition=json.loads(row["condition"]), route_to=row["route_to"],
-                      version=row["version"])
+                      action=row["action"] or "escalate", version=row["version"])
 
 
 def get_policy(conn: sqlite3.Connection, policy_id: str) -> PolicyRule | None:

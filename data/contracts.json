@@ -4,21 +4,21 @@
     "customer": "Acme Corp",
     "product": "Enterprise Platform",
     "seats": 1000,
-    "term_months": 36,
-    "tcv": 450000,
-    "annual_schedule": [100000, 150000, 200000],
+    "term_years": 3,
+    "tcv_usd": 450000,
+    "annual_schedule_usd": [100000, 150000, 200000],
     "discount_pct": 10,
-    "y1_monthly_invoice": 8333.33
+    "y1_monthly_invoice_usd": 8333.33
   },
   "globex": {
     "deal_id": "globex",
     "customer": "Globex Inc",
     "product": "Enterprise Platform",
     "seats": 800,
-    "term_months": 36,
-    "tcv": 360000,
-    "annual_schedule": [80000, 120000, 160000],
+    "term_years": 3,
+    "tcv_usd": 360000,
+    "annual_schedule_usd": [80000, 120000, 160000],
     "discount_pct": 25,
-    "y1_monthly_invoice": 6666.67
+    "y1_monthly_invoice_usd": 6666.67
   }
 }
