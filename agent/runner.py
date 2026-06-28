@@ -13,6 +13,9 @@ from agent.templates.skill_md import generate_skill_md
 from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
 from agent.scenarios import SCENARIOS
 from agent import revmem_client
+from evals import behaviors
+from evals.gold import build_gold
+from evals.grade import grade
 
 DATA_DIR = Path(__file__).parent / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
@@ -164,6 +167,20 @@ def run_session(
         output = interaction.output_text or "(no text output)"
         print(f"\nAgent response:\n{output[:1500]}\n")
 
+    # Grade the agent's ACTUAL output against gold labels derived from the data,
+    # instead of trusting scenario["expected"]. Falls back to modeled behavior
+    # only when the transcript yields no parseable decisions (e.g. offline stub).
+    decisions = behaviors.decisions_from_output(output)
+    graded_from_output = bool(decisions)
+    if not decisions:
+        step = f"{scenario['deal']}_{'cold' if scenario['prompt_style'] == 'cold_start' else 'learned'}"
+        try:
+            decisions = behaviors.modeled(step)
+        except KeyError:
+            decisions = []
+    scorecard = grade(scenario["deal"], decisions, build_gold(scenario["deal"]))
+    outcome = scorecard.outcome
+
     result = {
         "session_number": session_number,
         "session_id": session_id,
@@ -174,17 +191,19 @@ def run_session(
         "agent_output": output,
         "interaction_id": interaction.id,
         "environment_id": interaction.environment_id,
+        "outcome": outcome,
+        "graded_from_output": graded_from_output,
     }
 
-    # Close the session in RevMem (updates reputation + memory relevance).
-    expected = scenario["expected"]
-    revmem_client.complete_session(session_id, {
-        "accuracy": expected["accuracy"],
-        "material_caught": expected["material_caught"],
-        "false_escalations": expected["false_escalations"],
-    })
+    # Close the session in RevMem with the MEASURED outcome (updates reputation +
+    # memory relevance).
+    revmem_client.complete_session(session_id, outcome)
 
-    print(f"Expected: {scenario['expected']['description']}")
+    source = "agent output" if graded_from_output else "modeled fallback (no parseable decisions)"
+    print(f"\nGraded outcome ({source}): {json.dumps(outcome)}")
+    for note in scorecard.notes:
+        print(f"  - {note}")
+    print(f"Expected (designed): {scenario['expected']['description']}")
     print(f"Environment ID: {interaction.environment_id}")
 
     return result
