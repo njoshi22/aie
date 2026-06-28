@@ -1,3 +1,5 @@
+from typing import cast
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -41,6 +43,10 @@ def _route_schedule_approval(client: TestClient, agent_id: str | None = None) ->
     return payload
 
 
+def _approval_refs(payload: dict[str, object]) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], payload["approvals"])
+
+
 def _approve_request(client: TestClient, request_id: str) -> None:
     approvals = database.list_approvals_for_request(client.app.state.conn, request_id)
     for approval in approvals:
@@ -78,15 +84,18 @@ def test_approval_comment_seeds_shared_lesson(client):
     from core import context
 
     agent_id = _make_agent(client, PermissionTier.OBSERVER)
-    created = client.post(
+    created = cast(dict[str, object], client.post(
         "/route_for_approval",
         json={"agent_id": agent_id, "deal_id": "globex", "amount_usd": 40000, "change_type": "schedule_change"},
-    ).json()
+    ).json())
     conn = client.app.state.conn
-    token = database.get_approval(conn, created["approval_id"]).token
+    approval_id = str(created["approval_id"])
+    approval = database.get_approval(conn, approval_id)
+    assert approval is not None
+    token = approval.token
 
     resp = client.post(
-        f"/approvals/{created['approval_id']}/decision",
+        f"/approvals/{approval_id}/decision",
         data={"decision": "approve", "token": token, "comment": "Always flag the ramp schedule mismatch."},
     )
     assert resp.status_code == 200
@@ -212,7 +221,7 @@ def test_crm_write_uses_db_policy_for_created_approval_role(client):
 
 def test_approval_inbox_shows_pending_links_for_role(client):
     pending = _route_schedule_approval(client)
-    approval_id = pending["approvals"][0]["approval_id"]
+    approval_id = _approval_refs(pending)[0]["approval_id"]
 
     inbox = client.get("/approval-inbox/controller")
 
@@ -223,8 +232,8 @@ def test_approval_inbox_shows_pending_links_for_role(client):
 
 def test_approval_decision_persists_comment_and_exposes_it_to_polling_agent(client):
     pending = _route_schedule_approval(client)
-    approval_id = pending["approvals"][0]["approval_id"]
-    request_id = pending["approval_request_id"]
+    approval_id = str(_approval_refs(pending)[0]["approval_id"])
+    request_id = str(pending["approval_request_id"])
     approval = database.get_approval(client.app.state.conn, approval_id)
     assert approval is not None
 
@@ -244,8 +253,8 @@ def test_approval_decision_persists_comment_and_exposes_it_to_polling_agent(clie
 
 def test_trusted_rejection_comment_reroutes_approval_to_mentioned_persona(client):
     pending = _route_schedule_approval(client)
-    request_id = pending["approval_request_id"]
-    controller_id = pending["approvals"][0]["approval_id"]
+    request_id = str(pending["approval_request_id"])
+    controller_id = str(_approval_refs(pending)[0]["approval_id"])
     controller = database.get_approval(client.app.state.conn, controller_id)
     assert controller is not None
 
