@@ -196,6 +196,14 @@ def approval_link_location_detail() -> str:
     return "Human approval link is printed by the RevMem API server logs."
 
 
+def approval_source_label(source: str) -> str:
+    if source == "pre_tool_hook":
+        return "pre-tool-use hook"
+    if source == "model":
+        return "model tool call"
+    return "unknown source"
+
+
 # --- Scaffold mode ------------------------------------------------------------
 
 def run_scaffold(
@@ -355,11 +363,14 @@ class RichListener:
     def on_approval_needed(self, approval):
         link = approval.get("approval_link", "")
         route = approval.get("route_to", "unknown")
+        source = approval_source_label(str(approval.get("source", "")))
+        summary = str(approval.get("summary", ""))
+        detail = summary if summary else f"Approval requested by {source}"
         console.print()
         console.print(render.routing_panel(
             f"Routed for {route.upper()} approval",
             route,
-            approval.get("summary", ""),
+            f"{detail} ({source})",
         ))
         if link:
             console.print(render.approval_request_panel(route, link))

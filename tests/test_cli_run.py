@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cli.run import live_runtime_error
+from cli.run import approval_source_label, live_runtime_error
 
 
 def test_live_runtime_rejects_implicit_stub_mode() -> None:
@@ -29,3 +29,11 @@ def test_live_runtime_allows_explicit_stub_override() -> None:
         base_url="",
         allow_stub_live=True,
     ) is None
+
+
+def test_approval_source_label_for_hook() -> None:
+    assert approval_source_label("pre_tool_hook") == "pre-tool-use hook"
+
+
+def test_approval_source_label_for_model() -> None:
+    assert approval_source_label("model") == "model tool call"
