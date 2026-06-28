@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from api import approval_gate
 from api.approval_gate import ensure_method_approved
-from core import context, database, governance, session
+from core import circuit_breaker, context, database, governance, session
 from core import approval_policy
 from core.models import Agent, Approval, ApprovalStatus, Memory, MemoryType, PermissionTier
 from data import seed
@@ -156,10 +156,11 @@ def get_agent(agent_id: str, request: Request) -> dict[str, Any]:
 
 @router.get("/agents/{agent_id}/skill.md", response_class=PlainTextResponse)
 def skill_md(agent_id: str, request: Request) -> str:
-    a = database.get_agent(_conn(request), agent_id)
+    conn = _conn(request)
+    a = database.get_agent(conn, agent_id)
     if not a:
         raise HTTPException(404, "unknown agent")
-    return governance.generate_skill_md(a.permission_tier)
+    return governance.generate_skill_md(a.permission_tier, conn=conn, agent_id=agent_id)
 
 
 @router.post("/sessions")
@@ -189,7 +190,9 @@ def complete_session(session_id: str, body: CompleteSession, request: Request) -
     outcome = body.model_dump(exclude={"lesson", "memories_used", "memories_created"},
                               exclude_none=True)
     s2, a = session.complete(conn, session_id, outcome)
-    return {"session": s2.model_dump(mode="json"), "agent": a.model_dump(mode="json")}
+    agent_out = a.model_dump(mode="json")
+    agent_out["production_locked"] = not circuit_breaker.production_write_allowed(a)
+    return {"session": s2.model_dump(mode="json"), "agent": agent_out}
 
 
 @router.get("/sessions")
@@ -268,6 +271,11 @@ def write_crm(body: CrmWrite, request: Request, response: Response) -> dict[str,
     agent = database.get_agent(conn, body.agent_id)
     if not agent:
         raise HTTPException(404, "unknown agent")
+    # Reputation circuit breaker: a low-reputation agent is locked out of production
+    # entirely, before the tier gate or approval routing even run. Server-enforced.
+    if not circuit_breaker.production_write_allowed(agent):
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return circuit_breaker.lock_payload(agent)
     if not governance.can_use(agent.permission_tier, "write_crm"):
         raise HTTPException(403, f"tier {agent.permission_tier} cannot write_crm")
 

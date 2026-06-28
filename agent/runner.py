@@ -64,6 +64,7 @@ class RunnerListener(Protocol):
     def on_agent_delta(self, text: str) -> None: ...
     def on_agent_response(self, text: str) -> None: ...
     def on_approval_needed(self, approval: JsonObject) -> None: ...
+    def on_production_locked(self, payload: JsonObject) -> None: ...
     def on_graded(self, scorecard: object, graded_from_output: bool) -> None: ...
     def on_session_end(self, result: JsonObject) -> None: ...
     def on_agent_api_start(self, label: str) -> None: ...
@@ -104,6 +105,10 @@ class _PrintListener:
         link = approval.get("approval_link", "")
         route = approval.get("route_to", "unknown")
         print(f"  Routed to {route}: {link}")
+
+    def on_production_locked(self, payload: JsonObject) -> None:
+        print(f"  [LOCKED] production write denied: reputation {payload.get('reputation_score')} "
+              f"< floor {payload.get('floor')}")
 
     def on_graded(self, scorecard: object, graded_from_output: bool) -> None:
         source = "agent output" if graded_from_output else "modeled fallback"
@@ -430,6 +435,8 @@ def run_session(
     listener: RunnerListener | None = None,
     agent_name: str = AGENT_NAME,
     debug: bool = False,
+    skill_override: str | None = None,
+    force_step: str | None = None,
 ) -> JsonObject:
     active_listener: RunnerListener = listener if listener is not None else _PrintListener()
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
@@ -458,7 +465,7 @@ def run_session(
     )
 
     prompt = build_reconciliation_prompt(deal, allowed_tool_names)
-    skill_content = revmem_client.get_skill_md(agent_id)
+    skill_content = skill_override or revmem_client.get_skill_md(agent_id)
     tools = _interaction_tools(agent_id, session_id, allowed_tool_names)
     environment = build_environment(skill_content, AGENTS_MD)
 
@@ -522,6 +529,9 @@ def run_session(
             if _is_approval_evidence(tool_name, tool_result):
                 _notify(active_listener, "on_approval_needed", _approval_payload(tool_args, tool_result, "model"))
 
+            if isinstance(tool_result, dict) and tool_result.get("production_locked"):
+                _notify(active_listener, "on_production_locked", tool_result)
+
             results.append({
                 "type": "function_result",
                 "call_id": fc["id"],
@@ -556,7 +566,12 @@ def run_session(
 
     decisions = behaviors.decisions_from_output(output)
     graded_from_output = bool(decisions)
-    if not decisions:
+    if force_step:
+        # Pin the grade to a known step so the demo's reputation arc is deterministic
+        # even if the hosted agent rambles. Tool calls still stream live.
+        decisions = behaviors.modeled(force_step)
+        graded_from_output = False
+    elif not decisions:
         step = f"{scenario['deal']}_{'cold' if scenario['prompt_style'] == 'cold_start' else 'learned'}"
         try:
             decisions = behaviors.modeled(step)
@@ -608,6 +623,7 @@ def run_session(
         agent_after = completion["agent"]
         result["reputation"] = agent_after.get("reputation_score", result["reputation"])
         result["tier"] = agent_after.get("permission_tier", result["tier"])
+        result["production_locked"] = bool(agent_after.get("production_locked"))
     _notify(active_listener, "on_graded", scorecard, graded_from_output)
     _notify(active_listener, "on_session_end", result)
 

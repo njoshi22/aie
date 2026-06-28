@@ -423,6 +423,14 @@ class RichListener:
                 except TimeoutError:
                     console.print(render.step("Approval timed out", status="err"))
 
+    def on_production_locked(self, payload):
+        console.print()
+        console.print(render.prod_lock_panel(
+            float(payload.get("reputation_score", 0.0)),
+            float(payload.get("floor", 0.3)),
+            str(payload.get("reason", "")),
+        ))
+
     def on_graded(self, scorecard, graded_from_output):
         source = "agent output" if graded_from_output else "modeled fallback"
         console.print(render.outcome_panel(scorecard.outcome))
@@ -743,12 +751,131 @@ def run_continuous(
     return results
 
 
+# --- Self-heal mode (governed recursive self-improvement) ---------------------
+
+# A representative correction the agent would write once it has recovered.
+_GLOBEX_CORRECTION = {"annual_schedule_usd": [80000, 120000, 160000]}
+_GLOBEX_DISCREPANCY = {
+    "deal_id": "globex", "field": "annual_schedule_usd", "change_type": "schedule_change",
+    "contract_value": [80000, 120000, 160000], "crm_value": [120000, 120000, 120000],
+    "diff_usd": 40000.0,
+}
+
+
+def _self_heal_db():
+    from core import database
+    return database.get_connection(os.getenv("REVMEM_DB", str(database.DB_PATH)))
+
+
+def _seed_reputation_history(agent_id: str, accuracies: list[float]) -> None:
+    """Drive reputation to a known starting point via real complete_session calls."""
+    from agent import revmem_client
+    for acc in accuracies:
+        s = revmem_client.start_session(agent_id, "seed reconciliation")
+        revmem_client.complete_session(str(s["id"]), {"accuracy": acc})
+
+
+def _attempt_prod_write(agent_id: str) -> dict:
+    """Attempt a CRM write; returns the service result (lock dict or approval payload)."""
+    from agent import revmem_client
+    return revmem_client.write_crm(
+        agent_id=agent_id, deal_id="globex",
+        fields=_GLOBEX_CORRECTION, discrepancy=_GLOBEX_DISCREPANCY,
+    )
+
+
+def run_self_heal(
+    wait: bool = True,
+    approval_timeout: float | None = None,
+    approval_interval: float | None = None,
+    agent_name: str = LIVE_AGENT_NAME,
+    debug: bool = False,
+) -> list[dict]:
+    """Governed recursive self-improvement: bad run -> reputation tanks -> production
+    LOCKED -> diagnose -> agent rewrites its own skill -> re-eval -> reputation
+    recovers -> production RESTORED. The hero demo."""
+    from agent import revmem_client
+    from agent.runner import run_session
+    from core import optimizer, reputation
+    from core.demo_skills import WEAK_SKILL_V0
+    from data.seed import seed_skill_v0
+
+    floor = reputation.PRODUCTION_FLOOR
+    listener = RichListener(
+        wait_for_approvals=wait,
+        approval_timeout=approval_timeout,
+        approval_interval=approval_interval,
+    )
+
+    console.print()
+    console.print(render.divider("RevMem: Governed Recursive Self-Improvement"))
+
+    # --- Phase 1: seed a shaky-but-trusted agent (rep ~0.33, just above the floor)
+    agent = revmem_client.ensure_agent(agent_name)
+    agent_id = str(agent["id"])
+    conn = _self_heal_db()
+    seed_skill_v0(conn, agent_id)                        # active skill = weak v0
+    _seed_reputation_history(agent_id, [1.0, 0.0, 0.0])  # -> reputation ~0.33, ANALYST
+    agent = revmem_client.get_agent(agent_id)
+    rep = float(agent["reputation_score"])
+    console.print(render.step("Agent has production write access, but its recent record is shaky.", status="warn"))
+    console.print(render.reputation_bar(rep, agent["permission_tier"]))
+
+    # --- Phase 2: a bad run on the regressed skill tanks reputation below the floor
+    console.print(render.divider("Bad run - regressed skill"))
+    result_bad = run_session(
+        session_number=3, env_id=None, skill_override=WEAK_SKILL_V0,
+        force_step="globex_regressed", listener=listener, agent_name=agent_name, debug=debug,
+    )
+
+    # --- Phase 3: production write is now locked, server-side
+    console.print(render.divider("Production write attempt"))
+    lock = _attempt_prod_write(agent_id)
+    if lock.get("production_locked"):
+        console.print(render.prod_lock_panel(
+            float(lock.get("reputation_score", result_bad.get("reputation", 0.0))),
+            float(lock.get("floor", floor)), str(lock.get("reason", "")),
+        ))
+    else:
+        console.print(render.step("Expected a production lock but the write was not blocked.", status="err"))
+
+    # --- Phase 4: diagnose + rewrite the skill (genuinely live, canned fallback)
+    console.print(render.divider("Self-improvement loop"))
+    console.print(render.step("Diagnosing failure and rewriting the skill...", status="run"))
+    opt = optimizer.optimize_skill(conn, agent_id)
+    console.print(render.prompt_diff_panel(opt.base_skill, opt.new_skill))
+    mode = "canned fallback" if opt.fallback else "live Gemini rewrite"
+    console.print(render.step(
+        f"Skill re-scored: {opt.base_score:.2f} -> {opt.new_score:.2f}  ({mode})",
+        opt.rationale, status="ok",
+    ))
+    console.print(render.reputation_bar(opt.reputation_after or 0.0, tier_for(opt.reputation_after or 0.0)))
+
+    # --- Phase 5: production access restored; recovery run uses the rewritten skill
+    if (opt.reputation_after or 0.0) >= floor:
+        console.print(render.prod_unlock_panel(opt.reputation_after or 0.0, floor))
+    console.print(render.divider("Recovery run - self-optimized skill"))
+    result_good = run_session(
+        session_number=3, env_id=None, skill_override=opt.new_skill,
+        force_step="globex_learned", listener=listener, agent_name=agent_name, debug=debug,
+    )
+
+    # --- Summary
+    results = [result_bad, result_good]
+    console.print()
+    console.print(render.run_summary_table(results))
+    console.print()
+    _print_learning_scorecard(results)
+    return results
+
+
 # --- Entry point --------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RevMem agent-working CLI.")
     parser.add_argument("--live", action="store_true", help="real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)")
     parser.add_argument("--continuous", action="store_true", help="continuous interaction chain with live human feedback (requires GEMINI_API_KEY)")
+    parser.add_argument("--self-heal", dest="self_heal", action="store_true", help="governed recursive self-improvement: bad run -> production lock -> skill rewrite -> recovery (requires GEMINI_API_KEY)")
     parser.add_argument("--all", action="store_true", help="run all 3 sessions (1->2->3) with env-ID threading")
     parser.add_argument("--runs", type=int, default=None, metavar="N", help="seed once, then run N learned trials")
     parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
@@ -769,9 +896,27 @@ def main() -> None:
     delay_scale = _resolve_delay_scale(fast=fast)
     agent_name = args.agent_name
     if agent_name is None:
-        agent_name = LIVE_AGENT_NAME if args.reuse_agent or not (args.all or args.runs or args.continuous) else _fresh_agent_name()
+        agent_name = LIVE_AGENT_NAME if args.reuse_agent or not (args.all or args.runs or args.continuous or args.self_heal) else _fresh_agent_name()
 
-    if args.continuous:
+    if args.self_heal:
+        from agent import revmem_client
+
+        error = live_runtime_error(
+            stub_mode=revmem_client.STUB_MODE,
+            base_url=revmem_client.REVMEM_BASE_URL,
+            allow_stub_live=args.allow_stub_live,
+        )
+        if error:
+            parser.error(error)
+
+        run_self_heal(
+            wait=wait,
+            approval_timeout=args.approval_timeout,
+            approval_interval=args.approval_interval,
+            agent_name=agent_name,
+            debug=args.debug_agent,
+        )
+    elif args.continuous:
         from agent import revmem_client
 
         error = live_runtime_error(

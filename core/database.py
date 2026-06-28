@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.models import Agent, Approval, Memory, PolicyRule, Session
+from core.models import Agent, Approval, Memory, PolicyRule, Session, SkillVersion
 
 DB_PATH = Path("db/revmem.db")
 
@@ -39,6 +39,12 @@ CREATE TABLE IF NOT EXISTS approvals (
   deal_id TEXT, discrepancy TEXT, approver_role TEXT,
   status TEXT, comment TEXT NOT NULL DEFAULT '', token TEXT, created_at TEXT, decided_at TEXT
 );
+CREATE TABLE IF NOT EXISTS skill_versions (
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL,
+  content TEXT NOT NULL, score REAL, parent_version INTEGER, rationale TEXT,
+  active INTEGER DEFAULT 0, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_skill_versions_agent ON skill_versions(agent_id, version);
 """
 
 
@@ -332,3 +338,54 @@ def update_approval(conn: sqlite3.Connection, a: Approval) -> None:
         (a.status, a.comment, a.decided_at.isoformat() if a.decided_at else None, a.id),
     )
     conn.commit()
+
+
+# --- skill versions ---
+def _skill_version_from_row(row: sqlite3.Row) -> SkillVersion:
+    return SkillVersion(id=row["id"], agent_id=row["agent_id"], version=row["version"],
+                        content=row["content"], score=row["score"],
+                        parent_version=row["parent_version"], rationale=row["rationale"],
+                        active=bool(row["active"]),
+                        created_at=datetime.fromisoformat(row["created_at"]))
+
+
+def insert_skill_version(conn: sqlite3.Connection, sv: SkillVersion) -> None:
+    if sv.active:
+        conn.execute("UPDATE skill_versions SET active=0 WHERE agent_id=?", (sv.agent_id,))
+    conn.execute(
+        "INSERT INTO skill_versions "
+        "(id, agent_id, version, content, score, parent_version, rationale, active, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (sv.id, sv.agent_id, sv.version, sv.content, sv.score, sv.parent_version,
+         sv.rationale, 1 if sv.active else 0, sv.created_at.isoformat()),
+    )
+    conn.commit()
+
+
+def get_active_skill(conn: sqlite3.Connection, agent_id: str) -> SkillVersion | None:
+    row = conn.execute(
+        "SELECT * FROM skill_versions WHERE agent_id=? AND active=1 ORDER BY version DESC LIMIT 1",
+        (agent_id,),
+    ).fetchone()
+    return _skill_version_from_row(row) if row else None
+
+
+def list_skill_versions(conn: sqlite3.Connection, agent_id: str) -> list[SkillVersion]:
+    rows = conn.execute(
+        "SELECT * FROM skill_versions WHERE agent_id=? ORDER BY version", (agent_id,)
+    ).fetchall()
+    return [_skill_version_from_row(r) for r in rows]
+
+
+def set_active_skill(conn: sqlite3.Connection, agent_id: str, version: int) -> None:
+    conn.execute("UPDATE skill_versions SET active=0 WHERE agent_id=?", (agent_id,))
+    conn.execute("UPDATE skill_versions SET active=1 WHERE agent_id=? AND version=?",
+                 (agent_id, version))
+    conn.commit()
+
+
+def next_skill_version(conn: sqlite3.Connection, agent_id: str) -> int:
+    row = conn.execute(
+        "SELECT MAX(version) AS m FROM skill_versions WHERE agent_id=?", (agent_id,)
+    ).fetchone()
+    return 0 if row is None or row["m"] is None else int(row["m"]) + 1

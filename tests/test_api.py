@@ -22,6 +22,9 @@ def _make_agent(client, tier: str = PermissionTier.ANALYST) -> str:
     agent = database.get_agent(conn, agent_id)
     assert agent is not None
     agent.permission_tier = tier
+    # Keep reputation tier-consistent so the production circuit breaker (which
+    # gates on reputation) doesn't lock a legitimately-promoted agent.
+    agent.reputation_score = {"observer": 0.1, "analyst": 0.5, "autonomous": 0.7}.get(tier, 0.5)
     database.update_agent(conn, agent)
     return agent_id
 

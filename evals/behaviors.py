@@ -50,6 +50,14 @@ MODELED: dict[str, list[Decision]] = {
         Decision("discount_pct", "escalate", route_to="cfo_cco"),
         Decision("y1_monthly_invoice_usd", "dismiss"),
     ],
+    # Globex on a REGRESSED skill: misses both material discrepancies and
+    # over-escalates the rounding noise -> accuracy ~0. Drives the demo's
+    # deliberate bad run that tanks reputation and trips the circuit breaker.
+    "globex_regressed": [
+        Decision("annual_schedule_usd", "miss"),
+        Decision("discount_pct", "miss"),
+        Decision("y1_monthly_invoice_usd", "escalate", route_to="cfo"),
+    ],
 }
 
 

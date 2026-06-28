@@ -36,6 +36,7 @@ def _make_agent(client: TestClient, tier: str) -> str:
     agent = database.get_agent(conn, aid)
     assert agent is not None
     agent.permission_tier = tier
+    agent.reputation_score = {"observer": 0.1, "analyst": 0.5, "autonomous": 0.7}.get(tier, 0.5)
     database.update_agent(conn, agent)
     return aid
 

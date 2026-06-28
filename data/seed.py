@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from core import database
-from core.models import Agent, PolicyRule
+from core.demo_skills import WEAK_SKILL_V0
+from core.models import Agent, PolicyRule, SkillVersion
 
 DATA_DIR = Path(__file__).parent
 
@@ -24,6 +25,7 @@ def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent"
     conn.execute("DELETE FROM approvals")
     conn.execute("DELETE FROM memories")
     conn.execute("DELETE FROM sessions")
+    conn.execute("DELETE FROM skill_versions")
     conn.commit()
     # policy (replace existing so re-seed is idempotent)
     conn.execute("DELETE FROM policy_rules")
@@ -40,10 +42,26 @@ def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent"
     if existing:
         agent = Agent(id=existing["id"], name=demo_agent_name)
         database.update_agent(conn, agent)
+        seed_skill_v0(conn, agent.id)
         return agent
     agent = Agent(name=demo_agent_name)
     database.insert_agent(conn, agent)
+    seed_skill_v0(conn, agent.id)
     return agent
+
+
+def seed_skill_v0(conn: sqlite3.Connection, agent_id: str) -> None:
+    """Install the deliberately weak v0 skill as the active version (idempotent).
+
+    v0 is the headroom the optimizer recovers from; if the agent already has any
+    skill version we leave its history untouched.
+    """
+    if database.list_skill_versions(conn, agent_id):
+        return
+    database.insert_skill_version(conn, SkillVersion(
+        agent_id=agent_id, version=0, content=WEAK_SKILL_V0,
+        score=None, parent_version=None, rationale="seed v0 (weak baseline)", active=True,
+    ))
 
 
 if __name__ == "__main__":
