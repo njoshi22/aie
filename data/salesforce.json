@@ -1,0 +1,18 @@
+{
+  "acme": {
+    "deal_id": "acme",
+    "seats": 1000,
+    "tcv": 450000,
+    "annual_schedule": [150000, 150000, 150000],
+    "discount_pct": 10,
+    "y1_monthly_invoice": 8333.00
+  },
+  "globex": {
+    "deal_id": "globex",
+    "seats": 800,
+    "tcv": 360000,
+    "annual_schedule": [120000, 120000, 120000],
+    "discount_pct": 20,
+    "y1_monthly_invoice": 6666.00
+  }
+}

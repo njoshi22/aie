@@ -1,0 +1,12 @@
+[
+  {"description": "Immaterial line diffs < $1k → Account Manager",
+   "condition": {"min_usd": 0, "max_usd": 1000}, "route_to": "am"},
+  {"description": "$1k–$50k diffs → Controller",
+   "condition": {"min_usd": 1000, "max_usd": 50000}, "route_to": "controller"},
+  {"description": "Diffs >= $50k → CFO",
+   "condition": {"min_usd": 50000, "max_usd": null}, "route_to": "cfo"},
+  {"description": "Payment-schedule / ramp changes → CFO",
+   "condition": {"change_types": ["schedule_change"]}, "route_to": "cfo"},
+  {"description": "Discount beyond deal-desk authority → CFO",
+   "condition": {"change_types": ["discount_over_authority"]}, "route_to": "cfo"}
+]
