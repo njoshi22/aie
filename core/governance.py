@@ -8,8 +8,8 @@ _BASE_TOOLS = {"get_contract", "get_crm_record", "retrieve_context",
                "route_for_approval", "log_outcome"}
 TOOLS_BY_TIER: dict[str, set[str]] = {
     PermissionTier.OBSERVER: set(_BASE_TOOLS),
-    PermissionTier.ANALYST: _BASE_TOOLS | {"write_crm", "store_memory"},
-    PermissionTier.AUTONOMOUS: _BASE_TOOLS | {"write_crm", "store_memory"},
+    PermissionTier.ANALYST: _BASE_TOOLS | {"get_approval_status", "write_crm", "store_memory"},
+    PermissionTier.AUTONOMOUS: _BASE_TOOLS | {"get_approval_status", "write_crm", "store_memory"},
 }
 
 
