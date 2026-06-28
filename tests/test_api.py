@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from core import database
 
 
 @pytest.fixture()

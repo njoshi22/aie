@@ -28,7 +28,7 @@ def update_after_session(conn: sqlite3.Connection, agent_id: str) -> Agent:
         s for s in database.list_sessions(conn, agent_id)
         if s.status in ("completed", "failed") and s.outcome is not None
     ]
-    accuracies = [float(s.outcome.get("accuracy", 0.0)) for s in completed]
+    accuracies = [float(s.outcome.get("accuracy", 0.0)) for s in completed if s.outcome is not None]
     total = len(completed)
     successful = sum(1 for x in accuracies if x >= SUCCESS_THRESHOLD)
     avg_accuracy = sum(accuracies) / total if total else 0.0

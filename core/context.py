@@ -26,7 +26,10 @@ def embed_text(text: str) -> list[float]:
                 contents=text,
                 config=types.EmbedContentConfig(output_dimensionality=EMBED_DIM),
             )
-            return list(result.embeddings[0].values)
+            emb = result.embeddings
+            if emb is None or emb[0].values is None:
+                raise ValueError("no embeddings returned")
+            return list(emb[0].values)
         except Exception:
             pass
     return _hash_embed(text)

@@ -30,7 +30,9 @@ def seed(conn: sqlite3.Connection, demo_agent_name: str = "RevOps Finance Agent"
     # demo agent (only if none exists)
     existing = conn.execute("SELECT id FROM agents LIMIT 1").fetchone()
     if existing:
-        return database.get_agent(conn, existing["id"])
+        agent = database.get_agent(conn, existing["id"])
+        if agent is not None:
+            return agent
     agent = Agent(name=demo_agent_name)
     database.insert_agent(conn, agent)
     return agent

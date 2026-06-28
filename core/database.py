@@ -72,7 +72,7 @@ def get_agent(conn: sqlite3.Connection, agent_id: str) -> Agent | None:
         return None
     return Agent(id=row["id"], name=row["name"], reputation_score=row["reputation_score"],
                  total_sessions=row["total_sessions"], successful_sessions=row["successful_sessions"],
-                 permission_tier=row["permission_tier"], created_at=_dt(row["created_at"]))
+                 permission_tier=row["permission_tier"], created_at=datetime.fromisoformat(row["created_at"]))
 
 
 def get_agent_by_name(conn: sqlite3.Connection, name: str) -> Agent | None:
@@ -108,7 +108,7 @@ def _memory_from_row(row: sqlite3.Row) -> Memory:
                   embedding=json.loads(row["embedding"]), metadata=json.loads(row["metadata"]),
                   relevance_score=row["relevance_score"], access_count=row["access_count"],
                   sessions_since_used=row["sessions_since_used"],
-                  created_at=_dt(row["created_at"]), last_used_at=_dt(row["last_used_at"]))
+                  created_at=datetime.fromisoformat(row["created_at"]), last_used_at=_dt(row["last_used_at"]))
 
 
 def get_memory(conn: sqlite3.Connection, memory_id: str) -> Memory | None:
@@ -154,7 +154,7 @@ def _session_from_row(row: sqlite3.Row) -> Session:
                    outcome=json.loads(row["outcome"]) if row["outcome"] else None,
                    memories_used=json.loads(row["memories_used"]),
                    memories_created=json.loads(row["memories_created"]),
-                   started_at=_dt(row["started_at"]), ended_at=_dt(row["ended_at"]))
+                   started_at=datetime.fromisoformat(row["started_at"]), ended_at=_dt(row["ended_at"]))
 
 
 def get_session(conn: sqlite3.Connection, session_id: str) -> Session | None:
@@ -242,7 +242,7 @@ def get_approval(conn: sqlite3.Connection, approval_id: str) -> Approval | None:
     return Approval(id=row["id"], deal_id=row["deal_id"],
                     discrepancy=json.loads(row["discrepancy"]),
                     approver_role=row["approver_role"], status=row["status"],
-                    token=row["token"], created_at=_dt(row["created_at"]),
+                    token=row["token"], created_at=datetime.fromisoformat(row["created_at"]),
                     decided_at=_dt(row["decided_at"]))
 
 
