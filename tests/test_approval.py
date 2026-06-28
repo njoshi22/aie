@@ -43,8 +43,9 @@ def test_full_approval_flow(client):
     disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
     routed = client.post("/route_for_approval", json=disc).json()
     assert routed["route_to"] == "cfo" and routed["status"] == "pending"
+    assert "token" not in routed and "approval_link" not in routed  # agent must not receive the secret
     approval_id = routed["approval_id"]
-    tok = routed["approval_link"].split("token=")[1]
+    tok = database.get_approval(client.app.state.conn, approval_id).token
 
     body = {"agent_id": aid, "deal_id": "acme",
             "fields": {"annual_schedule": [100000, 150000, 200000]},
@@ -66,7 +67,7 @@ def test_approval_scope_bypass_blocked(client):
     disc = {"deal_id": "acme", "amount_usd": 0, "change_type": "schedule_change"}
     routed = client.post("/route_for_approval", json=disc).json()
     approval_id = routed["approval_id"]
-    tok = routed["approval_link"].split("token=")[1]
+    tok = database.get_approval(client.app.state.conn, approval_id).token
 
     # Approve the "acme" approval
     client.post(f"/approvals/{approval_id}/decision", data={"decision": "approve", "token": tok})

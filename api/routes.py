@@ -181,8 +181,9 @@ def route_for_approval(body: Discrepancy, request: Request) -> dict[str, Any]:
     base = os.getenv("REVMEM_BASE_URL", "")
     link = f"{base}/approvals/{approval.id}?token={approval.token}"
     print(f"[approval] route to {approver}: {link}")  # email is stubbed for the demo
-    return {"approval_id": approval.id, "token": approval.token, "route_to": approver,
-            "status": approval.status, "approval_link": link}
+    # Token intentionally NOT returned to the agent — the agent polls /approvals/{id}/status
+    # (token-less); the human approver receives the link+token via the stubbed email (stdout).
+    return {"approval_id": approval.id, "route_to": approver, "status": approval.status}
 
 
 @router.post("/crm/write")
