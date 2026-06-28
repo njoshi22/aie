@@ -156,7 +156,8 @@ def render_live(summary: dict, console: Console | None = None) -> None:
         acc_cell = Text()
         acc_cell.append_text(_bar(acc))
         acc_cell.append(f" {acc:.2f}")
-        recall = f"{int(p['material_caught'])}/{int(p['material_total'])}" if p.get("material_total") else "-"
+        has_recall = p.get("material_total") and p.get("material_caught") is not None
+        recall = f"{int(p['material_caught'])}/{int(p['material_total'])}" if has_recall else "-"
         ra = p.get("routing_accuracy")
         table.add_row(str(p["index"]), acc_cell, recall,
                       str(p.get("false_escalations", "?")),
