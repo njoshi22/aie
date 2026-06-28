@@ -500,17 +500,25 @@ def run_live_all(
     debug: bool = False,
 ) -> list[dict]:
     """Run sessions 1->2->3 with env-ID threading -- the full demo narrative."""
+    from agent.scenarios import SCENARIOS
+
     console.print()
     console.print(render.divider("RevMem Demo — 3 sessions, continual learning"))
 
     results = []
     env_id = None
     prev_interaction = None
+    prev_deal = None
 
     for session_num in [1, 2, 3]:
         if session_num > 1 and pause_between:
             console.print(render.divider(f"Session {session_num}"))
             console.input("[grey50]Press Enter to continue...[/]")
+
+        current_deal = SCENARIOS[session_num]["deal"]
+        if current_deal != prev_deal:
+            env_id = None
+            prev_interaction = None
 
         result = run_live(
             session_num,
@@ -524,6 +532,7 @@ def run_live_all(
         )
         results.append(result)
 
+        prev_deal = current_deal
         env_id = result.get("environment_id")
         prev_interaction = result.get("interaction_id")
 
@@ -547,17 +556,25 @@ def run_live_repeat(
     counted runs are post-seed generalization attempts whose reputation and
     memories accumulate on the same agent.
     """
+    from agent.scenarios import SCENARIOS
+
     console.print()
     console.print(render.divider(f"RevMem Self-Improvement — {runs} runs"))
 
     results = []
     env_id = None
     prev_interaction = None
+    prev_deal = None
     sequence: list[tuple[int, str]] = [(1, "Seed 1/2"), (2, "Seed 2/2")]
     sequence.extend((3, f"Run {i}/{runs}") for i in range(1, runs + 1))
 
     for index, (session_num, label) in enumerate(sequence, start=1):
         console.print(render.divider(label))
+
+        current_deal = SCENARIOS[session_num]["deal"]
+        if current_deal != prev_deal:
+            env_id = None
+            prev_interaction = None
 
         result = run_live(
             session_num,
@@ -572,6 +589,7 @@ def run_live_repeat(
         result["run"] = label if session_num != 3 else index - 2
         results.append(result)
 
+        prev_deal = current_deal
         env_id = result.get("environment_id")
         prev_interaction = result.get("interaction_id")
 
