@@ -394,8 +394,8 @@ class RichListener:
         from agent import revmem_client
         try:
             updated = revmem_client.get_agent(result.get("agent_id", ""))
-            rep = updated.get("reputation_score", rep)
-            tier = tier_for(rep)
+            rep = float(updated.get("reputation_score", rep))
+            tier = str(updated.get("permission_tier", tier_for(rep)))
         except Exception:
             pass
         console.print()
