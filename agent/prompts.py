@@ -24,11 +24,12 @@ def build_reconciliation_prompt(
 
     prompt += (
         "INSTRUCTIONS:\n"
-        "1. Compare every pricing field between the contract and CRM record.\n"
-        "2. For each field, state whether it matches or not.\n"
-        "3. For mismatches, classify as material or immaterial.\n"
-        "4. Route each discrepancy to the correct approver per the policy.\n"
-        "5. Output your analysis as the JSON format specified in AGENTS.md.\n"
+        "1. First, call retrieve_context to check for lessons from past reconciliations.\n"
+        "2. Compare every pricing field between the contract and CRM record.\n"
+        "3. For each field, state whether it matches or not.\n"
+        "4. For mismatches, classify as material or immaterial.\n"
+        "5. Route each discrepancy to the correct approver per the policy.\n"
+        "6. Output your analysis as the JSON format specified in AGENTS.md.\n"
     )
 
     if tier == "observer":

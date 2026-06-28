@@ -13,6 +13,7 @@ from agent.templates.skill_md import generate_skill_md
 from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
 from agent.scenarios import SCENARIOS
 from agent import revmem_client
+from agent.tools import get_tools_for_tier
 from evals import behaviors
 from evals.gold import build_gold
 from evals.grade import grade
@@ -68,6 +69,36 @@ def build_environment(
     }
 
 
+def _execute_tool(name: str, arguments: dict, agent_id: str, session_id: str) -> dict:
+    """Execute a tool call against RevMem and return the result as a dict."""
+    if name == "retrieve_context":
+        memories = revmem_client.retrieve_context(
+            agent_id, arguments.get("query", ""),
+        )
+        return {"memories": memories, "count": len(memories)}
+
+    if name == "store_memory":
+        mem = revmem_client.store_memory(
+            session_id, agent_id,
+            arguments.get("memory_type", "lesson"),
+            arguments.get("content", ""),
+            {},
+        )
+        return {"stored": True, "memory_id": mem.get("id", "unknown")}
+
+    if name == "route_for_approval":
+        result = revmem_client.route_for_approval(
+            arguments.get("deal_id", ""),
+            arguments.get("amount_usd", 0),
+            arguments.get("change_type", ""),
+            summary=arguments.get("summary", ""),
+        )
+        return result
+
+    # Antigravity sandbox has built-in tools (read_file, etc.) — skip unknown ones
+    return {"error": f"Unknown tool: {name}", "note": "Not a RevMem tool"}
+
+
 def run_session(
     session_number: int,
     env_id: str | None = None,
@@ -94,38 +125,25 @@ def run_session(
     session = revmem_client.start_session(agent_id, scenario["task"])
     session_id = session["id"]
 
-    # Retrieve memories from RevMem (reputation-reranked for this agent + query)
-    memories = revmem_client.retrieve_context(
-        agent_id,
-        f"reconcile {scenario['deal']} contract pricing",
-    )
-    if memories:
-        print(f"Retrieved {len(memories)} memories from RevMem:")
-        for m in memories:
-            print(f"  - {m.get('content', '')[:100]}")
-    else:
-        print("No memories available (cold start)")
-
-    # Build prompt based on session type
+    # Build prompt — no pre-fetched memories; agent will call retrieve_context itself
     if scenario["prompt_style"] == "cold_start":
         prompt = build_cold_start_prompt(contract, crm)
-        agents_md = AGENTS_MD  # basic persona, no special rules
     else:
-        prompt = build_reconciliation_prompt(contract, crm, policy, memories, tier)
-        agents_md = AGENTS_MD
+        prompt = build_reconciliation_prompt(contract, crm, policy, [], tier)
 
-    # Generate tier-scoped SKILL.md
+    # Generate tier-scoped SKILL.md and tools
     skill_content = generate_skill_md(tier)
+    tools = get_tools_for_tier(tier)
 
     # Build Antigravity environment
-    environment = build_environment(contract, crm, policy, skill_content, agents_md)
+    environment = build_environment(contract, crm, policy, skill_content, AGENTS_MD)
 
-    # Create Antigravity interaction
+    # --- Antigravity interaction with tool call loop ---
     print("Sending to Antigravity agent...")
     create_kwargs = {
         "agent": AGENT_MODEL,
         "input": prompt,
-        "stream": stream,
+        "tools": tools,
     }
 
     if env_id:
@@ -136,36 +154,59 @@ def run_session(
     if prev_interaction_id:
         create_kwargs["previous_interaction_id"] = prev_interaction_id
 
-    if stream:
-        print("\nAgent response (streaming):")
-        output_parts = []
-        completed_interaction = None
-        in_thinking = False
-        for event in client.interactions.create(**create_kwargs):
-            etype = type(event).__name__
-            if etype == "StepDelta":
-                delta = event.delta
-                if hasattr(delta, "content") and delta.content:
-                    in_thinking = True
-                elif hasattr(delta, "text") and delta.text:
-                    if in_thinking:
-                        in_thinking = False
-                        print("(thinking done)\n", flush=True)
-                    print(delta.text, end="", flush=True)
-                    output_parts.append(delta.text)
-            elif etype == "InteractionCompletedEvent":
-                completed_interaction = event.interaction
-            elif etype == "InteractionStatusUpdate":
-                status = getattr(event, "status", "")
-                if status:
-                    print(f"[{status}]", end=" ", flush=True)
-        print()
-        output = "".join(output_parts) if output_parts else "(no text output)"
-        interaction = completed_interaction
-    else:
-        interaction = client.interactions.create(**create_kwargs)
-        output = interaction.output_text or "(no text output)"
-        print(f"\nAgent response:\n{output[:1500]}\n")
+    interaction = client.interactions.create(**create_kwargs)
+    memories_used = 0
+    tool_calls_made = []
+
+    max_tool_rounds = 3
+    for _ in range(max_tool_rounds):
+        if interaction.status != "requires_action":
+            break
+
+        fc_steps = [
+            s.to_dict() for s in interaction.steps
+            if s.to_dict().get("type") == "function_call"
+        ]
+        if not fc_steps:
+            break
+
+        results = []
+        for fc in fc_steps:
+            tool_name = fc["name"]
+            tool_args = fc.get("arguments", {})
+            print(f"  [tool] {tool_name}({json.dumps(tool_args)})")
+            tool_calls_made.append(tool_name)
+
+            tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
+
+            if tool_name == "retrieve_context":
+                mems = tool_result.get("memories", [])
+                memories_used += len(mems)
+                if mems:
+                    for m in mems:
+                        print(f"    memory: {m.get('content', '')[:80]}")
+                else:
+                    print("    (no memories found)")
+
+            results.append({
+                "type": "function_result",
+                "call_id": fc["id"],
+                "name": tool_name,
+                "result": tool_result,
+            })
+
+        # Continue WITHOUT tools to prevent infinite retry loop
+        interaction = client.interactions.create(
+            agent=AGENT_MODEL,
+            previous_interaction_id=interaction.id,
+            environment=interaction.environment_id,
+            input=results,
+        )
+
+    output = interaction.output_text or "(no text output)"
+    if tool_calls_made:
+        print(f"  Tools called: {', '.join(tool_calls_made)}")
+    print(f"\nAgent response:\n{output[:1500]}\n")
 
     # Grade the agent's ACTUAL output against gold labels derived from the data,
     # instead of trusting scenario["expected"]. Falls back to modeled behavior
@@ -187,7 +228,7 @@ def run_session(
         "deal": scenario["deal"],
         "tier": tier,
         "reputation": agent_state["reputation_score"],
-        "memories_used": len(memories),
+        "memories_used": memories_used,
         "agent_output": output,
         "interaction_id": interaction.id,
         "environment_id": interaction.environment_id,
