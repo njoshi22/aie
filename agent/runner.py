@@ -606,7 +606,7 @@ def send_feedback(
     active_listener: RunnerListener = listener if listener is not None else _PrintListener()
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-    agent_state = revmem_client.ensure_agent(AGENT_NAME)
+    agent_state = revmem_client.get_agent(agent_id)
     tier = str(agent_state["permission_tier"])
     tools = get_tools_for_tier(tier)
     prompt = build_feedback_prompt(feedback_text)
@@ -678,6 +678,13 @@ def send_feedback(
     _notify(active_listener, "on_agent_response", output)
 
     stored = any(c["name"] == "store_memory" for c in tool_calls_made)
+    if not stored:
+        fb = revmem_client.start_session(agent_id, "store-feedback-lesson")
+        revmem_client.complete_session(fb["id"], {
+            "accuracy": 1.0,
+            "lesson": {"type": "lesson", "content": feedback_text},
+        })
+        stored = True
     return {
         "interaction_id": interaction.id,
         "environment_id": interaction.environment_id,
