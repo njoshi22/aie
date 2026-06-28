@@ -11,6 +11,8 @@ def test_authorize_write_decisions():
     sched = {"change_type": "schedule_change", "amount_usd": 0}
     disc = {"change_type": "discount_over_authority", "amount_usd": 5}
     assert governance.authorize_write(PermissionTier.OBSERVER, sched) == WriteDecision.DENY
+    # OBSERVER is denied even WITH an approval — the tier check must win over approval status.
+    assert governance.authorize_write(PermissionTier.OBSERVER, sched, ApprovalStatus.APPROVED) == WriteDecision.DENY
     assert governance.authorize_write(PermissionTier.ANALYST, sched) == WriteDecision.NEEDS_APPROVAL
     assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.APPROVED) == WriteDecision.ALLOW
     assert governance.authorize_write(PermissionTier.ANALYST, sched, ApprovalStatus.REJECTED) == WriteDecision.DENY

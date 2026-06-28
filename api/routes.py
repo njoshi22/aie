@@ -257,10 +257,12 @@ def approval_decision(approval_id: str, request: Request,
 @router.get("/approvals/{approval_id}/status")
 def approval_status(approval_id: str, request: Request) -> dict[str, Any]:
     # JSON status — the AGENT polls this between route_for_approval and write_crm.
+    # This endpoint is NOT token-gated, so it must NOT leak the approval token
+    # (which would let an id-holder self-approve via the decision endpoint).
     a = database.get_approval(_conn(request), approval_id)
     if not a:
         raise HTTPException(404, "unknown approval")
-    return a.model_dump(mode="json")
+    return a.model_dump(mode="json", exclude={"token"})
 
 
 @router.get("/contracts/{deal_id}")
