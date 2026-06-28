@@ -82,14 +82,14 @@ SCAFFOLD_SCENARIOS: dict[str, ScaffoldScenario] = {
         "outcome": {"material_caught": "0/1", "false_escalations": 1, "accuracy": 0.0},
     },
     "s3": {
-        "session_name": "Session 3 - live (ANALYST)",
+        "session_name": "Session 3 - scaffold (ANALYST)",
         "deal_id": "GLOBEX-2026",
         "task": "Reconcile signed contract against Salesforce; route discrepancies.",
         "fields": [
             {"field": "Seats", "contract": "800", "crm": "800", "verdict": "match"},
             {"field": "TCV", "contract": "$360,000", "crm": "$360,000", "verdict": "match"},
             {"field": "Annual schedule", "contract": "$80k / $120k / $160k", "crm": "$120k / $120k / $120k", "verdict": "material"},
-            {"field": "Discount", "contract": "20%", "crm": "20%", "verdict": "match"},
+            {"field": "Discount", "contract": "25%", "crm": "20%", "verdict": "material"},
             {"field": "Y1 monthly invoice", "contract": "$6,666.67", "crm": "$6,666.00", "verdict": "immaterial"},
         ],
         "rep_before": 0.50,
@@ -97,11 +97,14 @@ SCAFFOLD_SCENARIOS: dict[str, ScaffoldScenario] = {
         "tier": "analyst",
         "memory": "TCV parity is insufficient for ramped deals; reconcile the annual schedule.",
         "needs_approval": True,
-        "discrepancy": "Year-1 revenue understated: CRM flat $120k vs ramped $80k schedule.",
-        "recommended_fix": "Set CRM annual schedule to $80k / $120k / $160k (match signed contract).",
+        "discrepancy": (
+            "Year-1 revenue understated: CRM flat $120k vs ramped $80k schedule. "
+            "Discount also exceeds deal-desk authority: signed 25% vs CRM 20%."
+        ),
+        "recommended_fix": "Set CRM annual schedule to $80k / $120k / $160k and route the over-authority discount to CFO/CCO.",
         "amount_usd": 40000.0,
         "approver_email": "controller@example.com",
-        "outcome": {"material_caught": "1/1", "false_escalations": 0, "accuracy": 1.0},
+        "outcome": {"material_caught": "2/2", "false_escalations": 0, "accuracy": 1.0},
     },
 }
 

@@ -34,12 +34,12 @@ SCENARIOS = {
         "task": "Reconcile Globex Inc signed contract against CRM and flag pipeline impacts",
         "prompt_style": "full",
         "expected": {
-            "material_caught": 1,
+            "material_caught": 2,
             "false_escalations": 0,
             "accuracy": 1.0,
             "description": (
-                "Lesson generalizes to new deal. Agent catches ramp mismatch on Globex. "
-                "Also escalates 25% discount (over 20% authority) to CFO/CCO."
+                "Lesson generalizes to new deal. Agent catches the ramp schedule mismatch "
+                "and escalates the 25% discount over deal-desk authority to CFO/CCO."
             ),
         },
     },

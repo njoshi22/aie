@@ -62,7 +62,7 @@ The CLI replays a reconciliation session with mock data.
 # Session 1 — cold start (no approval needed)
 uv run python -m cli.run --session s1
 
-# Session 3 — scaffold approval flow (default)
+# Session 3 — scaffold approval flow (default, no Gemini call)
 uv run python -m cli.run
 
 # Skip approval polling (just print the link)
