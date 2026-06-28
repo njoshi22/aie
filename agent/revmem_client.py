@@ -191,6 +191,19 @@ def get_approval_status(approval_request_id: str) -> JsonObject:
     return _expect_object(_api_call("GET", path), path)
 
 
+def list_approval_requests(deal_id: str | None = None) -> list[JsonObject]:
+    """List approval requests (one per request), optionally by deal.
+
+    Evidence source for grading sessions whose tools ran server-side over MCP,
+    where the runner never saw the agent's route_for_approval/write_crm calls.
+    """
+    path = "/approval-requests"
+    if deal_id:
+        path += f"?{urlencode({'deal_id': deal_id})}"
+    result = _api_call("GET", path)
+    return result if isinstance(result, list) else []
+
+
 def write_crm(
     agent_id: str,
     deal_id: str,
@@ -303,6 +316,8 @@ def _stub_response(method: str, path: str, body: JsonObject | None = None) -> Js
             "approval_status": "pending",
             "approvals": approvals,
         }
+    if path.startswith("/approval-requests") and "/status" not in path:
+        return []  # list endpoint
     if path.startswith("/approval-requests/") and path.endswith("/status"):
         return {"approval_request_id": path.split("/")[2], "status": "approved"}  # stub auto-approves
     if path.startswith("/approvals/") and path.endswith("/status"):

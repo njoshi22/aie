@@ -4,7 +4,7 @@ from typing import Any, Literal, NotRequired, TypeAlias, TypedDict
 
 JsonValue: TypeAlias = Any
 JsonObject: TypeAlias = dict[str, Any]
-ToolCallSource: TypeAlias = Literal["model"]
+ToolCallSource: TypeAlias = Literal["model", "mcp"]
 
 
 class ToolCallRecord(TypedDict):

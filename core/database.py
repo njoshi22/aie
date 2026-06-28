@@ -299,6 +299,21 @@ def list_approvals_for_request(conn: sqlite3.Connection, request_id: str) -> lis
     return [_approval_from_row(row) for row in rows]
 
 
+def list_approval_requests(conn: sqlite3.Connection, deal_id: str | None = None) -> list[Approval]:
+    """One representative approval (earliest step) per request_id, optionally filtered by deal."""
+    if deal_id:
+        rows = conn.execute(
+            "SELECT * FROM approvals WHERE deal_id=? ORDER BY created_at, step_id", (deal_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM approvals ORDER BY created_at, step_id").fetchall()
+    by_request: dict[str, Approval] = {}
+    for row in rows:
+        a = _approval_from_row(row)
+        by_request.setdefault(a.request_id, a)
+    return list(by_request.values())
+
+
 def list_pending_approvals_for_role(conn: sqlite3.Connection, role: str) -> list[Approval]:
     rows = conn.execute(
         """

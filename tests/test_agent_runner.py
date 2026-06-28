@@ -242,18 +242,13 @@ def test_interaction_tools_use_mcp_server_for_live_service(monkeypatch) -> None:
 
     assert tools == [
         {
-            "mcpServers": [
-                {
-                    "name": "RevMem",
-                    "streamableHttpTransport": {
-                        "url": "http://127.0.0.1:8000/mcp",
-                        "headers": {
-                            "x-revmem-agent-id": "agent-1",
-                            "x-revmem-session-id": "session-1",
-                        },
-                    },
-                }
-            ]
+            "type": "mcp_server",
+            "name": "revmem",
+            "url": "http://127.0.0.1:8000/mcp/",
+            "headers": {
+                "x-revmem-agent-id": "agent-1",
+                "x-revmem-session-id": "session-1",
+            },
         }
     ]
 
@@ -269,6 +264,38 @@ def test_interaction_tools_use_function_declarations_in_stub_mode(monkeypatch) -
     )
 
     assert [tool["name"] for tool in tools] == ["get_contract", "route_for_approval"]
+
+
+def test_mcp_approval_evidence_recovers_new_route_records(monkeypatch) -> None:
+    """MCP-mode grading must reconstruct route_for_approval evidence from RevMem approvals."""
+    monkeypatch.setattr(
+        "agent.runner.revmem_client.list_approval_requests",
+        lambda deal: [
+            {"request_id": "old-1", "deal_id": "globex", "change_type": "schedule_change", "route_to": "controller", "status": "pending"},
+            {"request_id": "new-1", "deal_id": "globex", "change_type": "discount_over_authority", "amount_usd": 24000, "route_to": "cfo", "status": "approved"},
+        ],
+    )
+    records = runner._mcp_approval_evidence("globex", before_request_ids={"old-1"})
+
+    assert len(records) == 1  # only the request created this run
+    rec = records[0]
+    assert rec["name"] == "route_for_approval"
+    assert rec["arguments"]["deal_id"] == "globex"
+    assert rec["arguments"]["change_type"] == "discount_over_authority"
+    assert rec["result"]["approval_request_id"] == "new-1"
+    assert rec["result"]["approval_required"] is True
+    assert rec["source"] == "mcp"
+    # And the audit credits it: a material decision now keeps its escalation.
+    audited, notes = runner.audit_decisions_for_tool_evidence(
+        deal="globex",
+        decisions=[Decision("discount_pct", "escalate", route_to="cfo")],
+        gold=[GoldItem(field="discount_pct", contract=25, crm=20, diff_usd=24000.0,
+                       change_type="discount_over_authority", material=True,
+                       expected_action="escalate", expected_route="cfo")],
+        tool_calls=records,
+    )
+    assert audited == [Decision("discount_pct", "escalate", route_to="cfo")]
+    assert notes == []
 
 
 def _gold_schedule() -> GoldItem:

@@ -415,6 +415,23 @@ def approval_status(approval_id: str, request: Request) -> dict[str, Any]:
     return a.model_dump(mode="json", exclude={"token"})
 
 
+@router.get("/approval-requests")
+def list_approval_requests(request: Request, deal_id: str | None = None) -> list[dict[str, Any]]:
+    """List approval requests (one per request_id), optionally filtered by deal. Used to
+    reconstruct governed-action evidence when tools run server-side over MCP."""
+    out: list[dict[str, Any]] = []
+    for a in database.list_approval_requests(_conn(request), deal_id):
+        out.append({
+            "request_id": a.request_id,
+            "deal_id": a.deal_id,
+            "change_type": a.discrepancy.get("change_type", ""),
+            "amount_usd": a.discrepancy.get("amount_usd"),
+            "route_to": a.approver_role,
+            "status": a.status,
+        })
+    return out
+
+
 @router.get("/approval-requests/{request_id}/status")
 def approval_request_status(request_id: str, request: Request) -> dict[str, Any]:
     approvals = database.list_approvals_for_request(_conn(request), request_id)

@@ -148,9 +148,45 @@ def _service_allowed_tools(agent_state: JsonObject) -> list[str]:
     return raw
 
 
-def _interaction_tools(agent_id: str, session_id: str, allowed_tool_names: list[str]) -> list[JsonObject]:
+def _using_mcp_transport() -> bool:
+    """True when tools are served to the agent via the RevMem MCP server.
+
+    In MCP mode the agent calls tools server-side, so the runner never sees the
+    function_call/result steps and must reconstruct governed-action evidence from
+    RevMem (see the approval snapshot in run_session).
+    """
     transport = os.getenv("REVMEM_TOOL_TRANSPORT", "mcp").strip().lower()
-    if transport != "function" and not revmem_client.STUB_MODE and revmem_client.REVMEM_BASE_URL:
+    return transport != "function" and not revmem_client.STUB_MODE and bool(revmem_client.REVMEM_BASE_URL)
+
+
+def _mcp_approval_evidence(deal: str, before_request_ids: set[str]) -> list[ToolCallRecord]:
+    """Reconstruct route_for_approval evidence from approval requests created this run."""
+    records: list[ToolCallRecord] = []
+    for req in revmem_client.list_approval_requests(deal):
+        request_id = str(req.get("request_id", ""))
+        if not request_id or request_id in before_request_ids:
+            continue
+        records.append({
+            "name": "route_for_approval",
+            "arguments": {
+                "deal_id": str(req.get("deal_id", deal)),
+                "change_type": str(req.get("change_type", "")),
+                "amount_usd": req.get("amount_usd") or 0,
+                "summary": "",
+            },
+            "result": {
+                "approval_request_id": request_id,
+                "route_to": req.get("route_to"),
+                "status": req.get("status"),
+                "approval_required": True,
+            },
+            "source": "mcp",
+        })
+    return records
+
+
+def _interaction_tools(agent_id: str, session_id: str, allowed_tool_names: list[str]) -> list[JsonObject]:
+    if _using_mcp_transport():
         # Interactions API MCP tool shape: {type:"mcp_server", name, url, headers}
         return [
             {
@@ -378,6 +414,13 @@ def run_session(
     memories_used = 0
     memories_used_ids: list[str] = []
 
+    # MCP mode runs tools server-side, invisible to the runner. Snapshot existing
+    # approval requests so we can attribute new ones to this run when grading.
+    mcp_mode = _using_mcp_transport()
+    approvals_before: set[str] = (
+        {str(r.get("request_id", "")) for r in revmem_client.list_approval_requests(deal)} if mcp_mode else set()
+    )
+
     prompt = build_reconciliation_prompt(deal, allowed_tool_names)
     skill_content = revmem_client.get_skill_md(agent_id)
     tools = _interaction_tools(agent_id, session_id, allowed_tool_names)
@@ -469,6 +512,11 @@ def run_session(
 
     output = interaction.output_text or "(no text output)"
     _notify(active_listener, "on_agent_response", output)
+
+    # In MCP mode the agent's tool calls never reached the runner; recover the
+    # governed-action evidence from approval requests created during this run.
+    if mcp_mode:
+        tool_calls_made.extend(_mcp_approval_evidence(deal, approvals_before))
 
     decisions = behaviors.decisions_from_output(output)
     graded_from_output = bool(decisions)
