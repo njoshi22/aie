@@ -374,7 +374,15 @@ def run_session(
             decisions = behaviors.modeled(step)
         except KeyError:
             decisions = []
-    scorecard = grade(deal, decisions, build_gold(deal))
+    gold = build_gold(deal)
+    audited_decisions, audit_notes = audit_decisions_for_tool_evidence(
+        deal,
+        decisions,
+        gold,
+        tool_calls_made,
+    )
+    scorecard = grade(deal, audited_decisions, gold)
+    scorecard.notes.extend(audit_notes)
     outcome = scorecard.outcome
 
     result = {
@@ -389,6 +397,7 @@ def run_session(
         "interaction_id": interaction.id,
         "environment_id": interaction.environment_id,
         "tool_calls": tool_calls_made,
+        "audit_notes": audit_notes,
         "outcome": outcome,
         "graded_from_output": graded_from_output,
     }
