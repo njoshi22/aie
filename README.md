@@ -130,29 +130,64 @@ uv run python -m evals.run
 ## Project Structure
 
 ```text
-├── .agents/            # Antigravity agent config
-│   ├── AGENTS.md       # Agent persona + feedback handling rules
-│   └── skills/reconciliation/SKILL.md
-├── agent/              # Antigravity integration
-│   ├── runner.py       # Session executor + send_feedback
-│   ├── prompts.py      # Reconciliation and feedback prompt builders
-│   ├── scenarios.py    # Deal configs + expected outcomes
-│   ├── tools.py        # Tool definitions
-│   ├── tool_types.py   # Shared tool evidence types
-│   ├── revmem_client.py # HTTP client for RevMem API
-│   ├── templates/      # AGENTS.md + tier-scoped SKILL.md generator
-│   └── data/           # Mock contracts, CRM records, policy
-├── api/                # FastAPI app exposing the canonical RevMem contract
-│   └── approval_gate.py # Route/method approval gate helper
-├── core/               # SQLite memory, reputation, policy, and governance
-│   └── approval_policy.py # Route/method approval requirements and approver graphs
-├── data/               # Canonical demo seed data
-├── cli/                # Rich terminal UI
-│   ├── run.py          # --continuous / --live / scaffold modes
-│   └── render.py       # Rich panels
-├── evals/              # Continual-learning eval suite
-├── docs/adr/           # Architecture decision records
-└── requirements.txt
+├── .agents/                         # Antigravity agent config
+│   ├── AGENTS.md                    # Hosted-agent persona and feedback rules
+│   └── skills/reconciliation/       # Reconciliation skill used by the hosted agent
+├── .codex/                          # Local Codex workspace config
+├── .cursor/                         # Cursor MCP config
+├── .zed/                            # Zed editor config
+├── .env.example                     # Demo environment template
+├── .gitignore                       # Ignored local runtime artifacts
+├── .mcp.json                        # MCP server config
+├── opencode.json                    # OpenCode agent config
+├── ARCHITECTURE.md                  # Architecture notes
+├── prd.md                           # Product requirements
+├── spec.md                          # Demo/product spec
+├── agent/                           # Gemini/Antigravity integration path
+│   ├── runner.py                    # Hosted-agent session executor
+│   ├── demo.py                      # Three-session agent demo wrapper
+│   ├── prompts.py                   # Reconciliation and feedback prompt builders
+│   ├── scenarios.py                 # Deal configs and expected outcomes
+│   ├── tools.py                     # Tool definitions exposed to the hosted agent
+│   ├── tool_types.py                # Shared tool evidence types
+│   ├── revmem_client.py             # HTTP client for the RevMem API
+│   ├── spike.py                     # Local proof-of-concept spike script
+│   ├── templates/                   # Generated AGENTS.md and tiered SKILL.md content
+│   └── data/                        # Agent-local Acme/Globex contract, CRM, and policy fixtures
+├── api/                             # FastAPI service boundary
+│   ├── main.py                      # App factory, SQLite lifecycle, and seed loading
+│   ├── routes.py                    # Agents, sessions, memory, CRM, policy, and approval routes
+│   └── approval_gate.py             # Route/method approval gate helper
+├── core/                            # SQLite memory, reputation, policy, session, and governance logic
+│   ├── approval_policy.py           # Approval requirements, joins, and dependency rules
+│   ├── context.py                   # Memory retrieval and embedding helpers
+│   ├── database.py                  # SQLite schema and persistence helpers
+│   ├── governance.py                # Tool permissions, routing, and tier behavior
+│   ├── models.py                    # Pydantic domain models
+│   ├── reputation.py                # Reputation scoring and tier calculation
+│   └── session.py                   # Session lifecycle and memory reinforcement
+├── data/                            # Canonical API seed data and fixture loader
+│   ├── contracts.json
+│   ├── salesforce.json
+│   ├── policy.json
+│   └── seed.py
+├── cli/                             # Rich terminal demo path
+│   ├── run.py                       # --continuous / --live / scaffold modes
+│   └── render.py                    # Rich panels, tables, and status rendering
+├── evals/                           # Continual-learning evaluation harness
+│   ├── behaviors.py                 # Expected behavior definitions
+│   ├── gold.py                      # Gold-label generation
+│   ├── grade.py                     # Output grading logic
+│   ├── harness.py                   # Eval orchestration helpers
+│   ├── report.py                    # Report generation
+│   ├── run.py                       # Full eval runner
+│   └── test_grade.py                # Eval grading tests
+├── docs/
+│   ├── adr/                         # Architecture decision records
+│   └── superpowers/plans/           # Saved implementation plans
+├── tests/                           # Unit and API coverage for core, agent, CLI, seed, and governance paths
+├── pytest.ini                       # Pytest configuration
+└── requirements.txt                 # Runtime and test dependencies
 ```
 
 ## Key Concepts
