@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
-from agent.runner import _execute_tool, audit_decisions_for_tool_evidence
-from agent.tool_types import ToolCallRecord
+from agent import runner
+from agent.prompts import build_reconciliation_prompt
+from agent.scenarios import SCENARIOS
+from agent.tool_types import JsonObject, ToolCallRecord
 from evals.gold import GoldItem
 from evals.grade import Decision, grade
 
@@ -23,6 +25,105 @@ def test_tool_call_record_shape() -> None:
     assert record["source"] == "pre_tool_hook"
 
 
+class _FakeInteractions:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return {"ok": True}
+
+
+class _FakeClient:
+    def __init__(self) -> None:
+        self.interactions = _FakeInteractions()
+
+
+class _TimingListener:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str] | tuple[str, str, float]] = []
+
+    def on_session_start(self, session_number: int, deal: str, tier: str, reputation: float, task: str) -> None:
+        pass
+
+    def on_tool_call(self, name: str, arguments: JsonObject) -> None:
+        pass
+
+    def on_tool_result(self, name: str, result: JsonObject) -> None:
+        pass
+
+    def on_memory_retrieved(self, memories: list[JsonObject]) -> None:
+        pass
+
+    def on_agent_response(self, text: str) -> None:
+        pass
+
+    def on_approval_needed(self, approval: JsonObject) -> None:
+        pass
+
+    def on_graded(self, scorecard: object, graded_from_output: bool) -> None:
+        pass
+
+    def on_session_end(self, result: JsonObject) -> None:
+        pass
+
+    def on_agent_api_start(self, label: str) -> None:
+        self.events.append(("start", label))
+
+    def on_agent_api_end(self, label: str, elapsed_s: float) -> None:
+        self.events.append(("end", label, elapsed_s))
+
+    def on_tool_timing(self, name: str, elapsed_s: float) -> None:
+        pass
+
+
+def test_interaction_create_reports_wait_timing() -> None:
+    client = _FakeClient()
+    listener = _TimingListener()
+
+    result = runner._create_interaction(
+        client,
+        {"agent": "model", "input": "prompt"},
+        "initial response",
+        listener,
+        debug=False,
+    )
+
+    assert result == {"ok": True}
+    assert client.interactions.calls == [{"agent": "model", "input": "prompt"}]
+    assert listener.events[0] == ("start", "initial response")
+    end_event = listener.events[1]
+    assert end_event[0:2] == ("end", "initial response")
+    assert len(end_event) == 3
+    assert end_event[2] >= 0
+
+
+def test_session_one_completion_payload_seeds_reviewer_lesson() -> None:
+    payload = runner._completion_payload(
+        {"accuracy": 0.0},
+        memories_used=[],
+        memories_created=[],
+        scenario=cast(runner.Scenario, SCENARIOS[1]),
+    )
+
+    assert payload["lesson"]["content"].startswith("TCV parity is insufficient")
+    assert payload["lesson"]["metadata"]["source"] == "session_1_reviewer_correction"
+
+
+def test_prompt_uses_prefetched_memories_without_forcing_tool_call() -> None:
+    prompt = build_reconciliation_prompt(
+        {"deal_id": "acme"},
+        {"deal_id": "acme"},
+        {"rules": []},
+        [{"content": "Always compare annual schedules."}],
+        "observer",
+    )
+
+    assert "RELEVANT LESSONS FROM PAST RECONCILIATIONS" in prompt
+    assert "do not call retrieve_context unless the context is missing" in prompt
+    assert "classify sub-$1 rounding differences as immaterial" in prompt
+
+
 def _gold_schedule() -> GoldItem:
     return GoldItem(
         field="annual_schedule_usd",
@@ -37,7 +138,7 @@ def _gold_schedule() -> GoldItem:
 
 
 def test_material_decision_without_route_tool_is_downgraded() -> None:
-    audited, notes = audit_decisions_for_tool_evidence(
+    audited, notes = runner.audit_decisions_for_tool_evidence(
         deal="globex",
         decisions=[Decision("annual_schedule_usd", "escalate", route_to="controller")],
         gold=[_gold_schedule()],
@@ -49,7 +150,7 @@ def test_material_decision_without_route_tool_is_downgraded() -> None:
 
 
 def test_material_decision_with_route_tool_uses_tool_route() -> None:
-    audited, notes = audit_decisions_for_tool_evidence(
+    audited, notes = runner.audit_decisions_for_tool_evidence(
         deal="globex",
         decisions=[Decision("annual_schedule_usd", "escalate", route_to="controller")],
         gold=[_gold_schedule()],
@@ -76,7 +177,7 @@ def test_material_decision_with_route_tool_uses_tool_route() -> None:
 
 
 def test_material_decision_with_hook_routed_approval_is_credited_with_note() -> None:
-    audited, notes = audit_decisions_for_tool_evidence(
+    audited, notes = runner.audit_decisions_for_tool_evidence(
         deal="globex",
         decisions=[Decision("annual_schedule_usd", "escalate", route_to="controller")],
         gold=[_gold_schedule()],
@@ -104,7 +205,7 @@ def test_material_decision_with_hook_routed_approval_is_credited_with_note() -> 
 
 
 def test_missing_route_tool_makes_scorecard_fail_material_recall() -> None:
-    audited, notes = audit_decisions_for_tool_evidence(
+    audited, notes = runner.audit_decisions_for_tool_evidence(
         deal="globex",
         decisions=[Decision("annual_schedule_usd", "escalate", route_to="controller")],
         gold=[_gold_schedule()],
@@ -119,8 +220,6 @@ def test_missing_route_tool_makes_scorecard_fail_material_recall() -> None:
 
 
 def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch) -> None:
-    from agent.runner import run_session
-
     class FakeStep:
         def __init__(self, data: dict[str, Any]) -> None:
             self._data = data
@@ -203,6 +302,7 @@ def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch
             self.interactions = FakeInteractions()
 
     completed: list[dict[str, object]] = []
+    route_calls: list[dict[str, object]] = []
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr("agent.runner.genai.Client", lambda api_key: FakeClient())
@@ -212,9 +312,13 @@ def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch
     )
     monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
     monkeypatch.setattr("agent.runner.revmem_client.retrieve_context", lambda agent_id, query: {"memories": [], "policy": []})
+    monkeypatch.setattr(
+        "agent.runner.revmem_client.route_for_approval",
+        lambda *args, **kwargs: route_calls.append({"args": args, "kwargs": kwargs}) or {"approval_id": "appr-unexpected"},
+    )
     monkeypatch.setattr("agent.runner.revmem_client.complete_session", lambda session_id, outcome: completed.append(outcome) or {})
 
-    result = run_session(3)
+    result = runner.run_session(3)
 
     assert completed[0]["accuracy"] == 0.333
     assert completed[0]["material_caught"] == 0
@@ -222,10 +326,10 @@ def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch
         "annual_schedule_usd: missing route_for_approval tool call",
         "discount_pct: missing route_for_approval tool call",
     ]
+    assert route_calls == []
 
 
 def test_run_session_routes_approval_in_pre_tool_hook(monkeypatch) -> None:
-    from agent.runner import run_session
     from core.models import PermissionTier
 
     class FakeStep:
@@ -332,11 +436,12 @@ def test_run_session_routes_approval_in_pre_tool_hook(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
+    monkeypatch.setattr("agent.runner.revmem_client.retrieve_context", lambda agent_id, query: {"memories": [], "policy": []})
     monkeypatch.setattr("agent.runner.revmem_client.route_for_approval", fake_route_for_approval)
     monkeypatch.setattr("agent.runner.revmem_client.write_crm", fake_write_crm)
     monkeypatch.setattr("agent.runner.revmem_client.complete_session", lambda session_id, outcome: completed.append(outcome) or {})
 
-    result = run_session(3)
+    result = runner.run_session(3)
 
     assert route_calls == [("globex", 40000.0, "schedule_change")]
     assert write_calls == []
@@ -355,7 +460,7 @@ def test_retrieve_context_returns_policy_to_agent(monkeypatch) -> None:
 
     monkeypatch.setattr("agent.revmem_client.retrieve_context", fake_retrieve_context)
 
-    result = _execute_tool("retrieve_context", {"query": "ramp"}, "agent-1", "session-1")
+    result = runner._execute_tool("retrieve_context", {"query": "ramp"}, "agent-1", "session-1")
 
     assert result == {
         "memories": [{"id": "mem-1"}],
@@ -379,7 +484,7 @@ def test_write_crm_tool_executes_client_call(monkeypatch) -> None:
 
     monkeypatch.setattr("agent.revmem_client.write_crm", fake_write_crm)
 
-    result = _execute_tool(
+    result = runner._execute_tool(
         "write_crm",
         {
             "deal_id": "globex",
@@ -402,6 +507,6 @@ def test_get_approval_status_tool_executes_client_call(monkeypatch) -> None:
 
     monkeypatch.setattr("agent.revmem_client.get_approval_status", fake_get_approval_status)
 
-    result = _execute_tool("get_approval_status", {"approval_id": "appr-1"}, "agent-1", "session-1")
+    result = runner._execute_tool("get_approval_status", {"approval_id": "appr-1"}, "agent-1", "session-1")
 
     assert result == {"id": "appr-1", "status": "approved"}

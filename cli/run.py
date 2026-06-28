@@ -9,7 +9,7 @@ Run:
     uv run python -m cli.run --live --all          # all 3 sessions, env-ID threaded
     uv run python -m cli.run --live --runs 10      # repeat 10x, show improvement curve
     uv run python -m cli.run --live --session 1    # specific session
-    uv run python -m cli.run                       # scaffold S3 with approval polling
+    uv run python -m cli.run                       # scaffold S3 with live approval
     uv run python -m cli.run --session s1          # scaffold S1 cold start
 
 For the live approval gate, also run the RevMem API:
@@ -19,6 +19,7 @@ For the live approval gate, also run the RevMem API:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import time
@@ -32,6 +33,7 @@ from cli import render
 load_dotenv()
 
 console = Console()
+LIVE_AGENT_NAME = "RevOps Finance Agent"
 JsonObject = dict[str, Any]
 
 
@@ -56,6 +58,7 @@ class ScaffoldScenario(TypedDict, total=False):
     discrepancy: NotRequired[str]
     recommended_fix: NotRequired[str]
     amount_usd: NotRequired[float]
+    approver_role: NotRequired[str]
     approver_email: NotRequired[str]
 
 # --- Mock scenario data (scaffold mode) --------------------------------------
@@ -103,6 +106,7 @@ SCAFFOLD_SCENARIOS: dict[str, ScaffoldScenario] = {
         ),
         "recommended_fix": "Set CRM annual schedule to $80k / $120k / $160k and route the over-authority discount to CFO/CCO.",
         "amount_usd": 40000.0,
+        "approver_role": "controller",
         "approver_email": "controller@example.com",
         "outcome": {"material_caught": "2/2", "false_escalations": 0, "accuracy": 1.0},
     },
@@ -164,6 +168,11 @@ def live_runtime_error(stub_mode: bool, base_url: str, allow_stub_live: bool) ->
     if not stub_mode and not base_url:
         return "REVMEM_BASE_URL is empty even though stub mode is disabled."
     return None
+
+
+def _fresh_agent_name() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"{LIVE_AGENT_NAME} demo {stamp}-{os.getpid()}"
 
 
 def _beat(seconds: float = 0.6, delay_scale: float | None = None, fast: bool = False) -> None:
@@ -254,7 +263,9 @@ def run_scaffold(
         return
 
     console.print()
-    console.print(render.routing_panel(sc["discrepancy"], sc["approver_email"], sc["recommended_fix"]))
+    approver_role = sc.get("approver_role", "cfo")
+    approver_label = approver_role.replace("_", " + ").upper()
+    console.print(render.routing_panel(sc["discrepancy"], approver_label, sc["recommended_fix"]))
 
     from agent import revmem_client
 
@@ -283,7 +294,7 @@ def run_scaffold(
         return
 
     try:
-        with console.status("[yellow]waiting for approval...[/]", spinner="dots"):
+        with console.status(f"[yellow]waiting for {approver_label} approval...[/]", spinner="dots"):
             decided = wait_for_revmem_approval(
                 approval_id,
                 timeout=_resolve_approval_timeout(approval_timeout),
@@ -294,7 +305,7 @@ def run_scaffold(
         return
 
     if decided.get("status") == "approved":
-        console.print(render.step("Approved", status="ok"))
+        console.print(render.step(f"{approver_label} approved", status="ok"))
         _beat(delay_scale=delay_scale)
         console.print(render.step(f"write_crm({sc['deal_id']}, corrected_fields)", "ANALYST permission - executed", status="ok"))
         console.print()
@@ -302,7 +313,7 @@ def run_scaffold(
         console.print(render.reputation_bar(sc["rep_after"], tier_for(sc["rep_after"])))
         console.print("\n[green]Reconciled. Reputation rises -> next deal could auto-reconcile unattended.[/]\n")
     else:
-        console.print(render.step("Rejected", "CRM left unchanged", status="warn"))
+        console.print(render.step(f"{approver_label} rejected", "CRM left unchanged", status="warn"))
 
 
 # --- Live mode (real Antigravity agent + Rich rendering) ----------------------
@@ -353,7 +364,6 @@ class RichListener:
     def on_agent_response(self, text):
         console.print()
         console.print(render.step("Agent analysis complete", status="ok"))
-        # Try to extract and render the diff table from agent JSON output
         fields = _parse_fields_from_output(text)
         if fields:
             console.print()
@@ -375,7 +385,13 @@ class RichListener:
         if link:
             console.print(render.approval_request_panel(route, link))
         else:
-            console.print(render.step("Approval requested", approval_link_location_detail(), status="warn"))
+            console.print(
+                render.step(
+                    "Approval created",
+                    "human approval link is held by the RevMem API server log",
+                    status="warn",
+                )
+            )
         if self._wait:
             approval_id = str(approval.get("approval_id", ""))
             if approval_id:
@@ -404,7 +420,6 @@ class RichListener:
     def on_session_end(self, result):
         rep = result.get("reputation", 0)
         tier = tier_for(rep)
-        # Fetch updated reputation after session completion
         from agent import revmem_client
         try:
             updated = revmem_client.get_agent(result.get("agent_id", ""))
@@ -416,11 +431,21 @@ class RichListener:
         console.print(render.reputation_bar(rep, tier))
         console.print()
 
+    def on_agent_api_start(self, label):
+        console.print(render.step(f"hosted agent API: {label}", "waiting for model response...", status="run"))
+
+    def on_agent_api_end(self, label, elapsed_s):
+        console.print(render.step(f"hosted agent API: {label}", f"{elapsed_s:.1f}s", status="ok"))
+
+    def on_tool_timing(self, name, elapsed_s):
+        if name in {"read_file", "list_files"} and elapsed_s < 0.1:
+            return
+        console.print(render.step(f"{name} completed", f"{elapsed_s:.1f}s", status="ok"))
+
 
 def _parse_fields_from_output(text: str) -> list[dict] | None:
     """Try to extract fields_compared from agent JSON output for the diff table."""
     import re
-    # Find JSON object in the output
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     blob = fenced.group(1) if fenced else None
     if not blob:
@@ -474,6 +499,8 @@ def run_live(
     prev_interaction: str | None = None,
     approval_timeout: float | None = None,
     approval_interval: float | None = None,
+    agent_name: str = LIVE_AGENT_NAME,
+    debug: bool = False,
 ) -> dict:
     from agent.runner import run_session
     listener = RichListener(
@@ -481,7 +508,14 @@ def run_live(
         approval_timeout=approval_timeout,
         approval_interval=approval_interval,
     )
-    return run_session(session_number, env_id=env_id, prev_interaction_id=prev_interaction, listener=listener)
+    return run_session(
+        session_number,
+        env_id=env_id,
+        prev_interaction_id=prev_interaction,
+        listener=listener,
+        agent_name=agent_name,
+        debug=debug,
+    )
 
 
 def run_live_all(
@@ -489,19 +523,29 @@ def run_live_all(
     approval_timeout: float | None = None,
     approval_interval: float | None = None,
     pause_between: bool = True,
+    agent_name: str = LIVE_AGENT_NAME,
+    debug: bool = False,
 ) -> list[dict]:
-    """Run sessions 1→2→3 with env-ID threading — the full demo narrative."""
+    """Run sessions 1->2->3 with env-ID threading -- the full demo narrative."""
+    from agent.scenarios import SCENARIOS
+
     console.print()
     console.print(render.divider("RevMem Demo — 3 sessions, continual learning"))
 
     results = []
     env_id = None
     prev_interaction = None
+    prev_deal = None
 
     for session_num in [1, 2, 3]:
         if session_num > 1 and pause_between:
             console.print(render.divider(f"Session {session_num}"))
             console.input("[grey50]Press Enter to continue...[/]")
+
+        current_deal = SCENARIOS[session_num]["deal"]
+        if current_deal != prev_deal:
+            env_id = None
+            prev_interaction = None
 
         result = run_live(
             session_num,
@@ -510,9 +554,12 @@ def run_live_all(
             prev_interaction=prev_interaction,
             approval_timeout=approval_timeout,
             approval_interval=approval_interval,
+            agent_name=agent_name,
+            debug=debug,
         )
         results.append(result)
 
+        prev_deal = current_deal
         env_id = result.get("environment_id")
         prev_interaction = result.get("interaction_id")
 
@@ -527,29 +574,34 @@ def run_live_repeat(
     wait: bool = True,
     approval_timeout: float | None = None,
     approval_interval: float | None = None,
+    agent_name: str = LIVE_AGENT_NAME,
+    debug: bool = False,
 ) -> list[dict]:
-    """Run session 3 repeatedly to show long-term self-improvement.
+    """Seed once with S1/S2, then repeat S3 to show self-improvement.
 
-    Each run uses the same deal archetype (Globex) but reputation and
-    memories accumulate in RevMem across runs, so the agent should
-    improve over time.
+    The intentional cold-start failure is setup, not a repeated trial. The
+    counted runs are post-seed generalization attempts whose reputation and
+    memories accumulate on the same agent.
     """
+    from agent.scenarios import SCENARIOS
+
     console.print()
     console.print(render.divider(f"RevMem Self-Improvement — {runs} runs"))
 
     results = []
     env_id = None
     prev_interaction = None
+    prev_deal = None
+    sequence: list[tuple[int, str]] = [(1, "Seed 1/2"), (2, "Seed 2/2")]
+    sequence.extend((3, f"Run {i}/{runs}") for i in range(1, runs + 1))
 
-    for i in range(1, runs + 1):
-        console.print(render.divider(f"Run {i}/{runs}"))
+    for index, (session_num, label) in enumerate(sequence, start=1):
+        console.print(render.divider(label))
 
-        # Alternate between acme (sessions 1-2) and globex (session 3) to
-        # exercise generalization. After the first 3, cycle session 3.
-        if i <= 3:
-            session_num = i
-        else:
-            session_num = 3
+        current_deal = SCENARIOS[session_num]["deal"]
+        if current_deal != prev_deal:
+            env_id = None
+            prev_interaction = None
 
         result = run_live(
             session_num,
@@ -558,10 +610,13 @@ def run_live_repeat(
             prev_interaction=prev_interaction,
             approval_timeout=approval_timeout,
             approval_interval=approval_interval,
+            agent_name=agent_name,
+            debug=debug,
         )
-        result["run"] = i
+        result["run"] = label if session_num != 3 else index - 2
         results.append(result)
 
+        prev_deal = current_deal
         env_id = result.get("environment_id")
         prev_interaction = result.get("interaction_id")
 
@@ -576,18 +631,24 @@ def run_live_repeat(
 def main() -> None:
     parser = argparse.ArgumentParser(description="RevMem agent-working CLI.")
     parser.add_argument("--live", action="store_true", help="real Antigravity agent with Rich rendering (requires GEMINI_API_KEY)")
-    parser.add_argument("--all", action="store_true", help="run all 3 sessions (1→2→3) with env-ID threading")
-    parser.add_argument("--runs", type=int, default=None, metavar="N", help="repeat N times to show long-term self-improvement")
+    parser.add_argument("--all", action="store_true", help="run all 3 sessions (1->2->3) with env-ID threading")
+    parser.add_argument("--runs", type=int, default=None, metavar="N", help="seed once, then run N learned trials")
     parser.add_argument("--session", default=None, help="session to run: s1/s3 (scaffold) or 1/2/3 (live)")
     parser.add_argument("--no-wait", action="store_true", help="skip approval polling")
     parser.add_argument("--fast", action="store_true", help="skip demo pacing and approval polling for local integration checks")
     parser.add_argument("--approval-timeout", type=float, default=None, help="seconds to wait for approval before timing out")
     parser.add_argument("--approval-interval", type=float, default=None, help="seconds between approval status polls")
     parser.add_argument("--allow-stub-live", action="store_true", help="allow --live to use offline RevMem stubs; diagnostic only")
+    parser.add_argument("--agent-name", default=None, help="RevMem live agent name to get or create")
+    parser.add_argument("--reuse-agent", action="store_true", help="reuse the persisted live demo agent for --all/--runs")
+    parser.add_argument("--debug-agent", action="store_true", help="print live Interactions API step debugging")
     args = parser.parse_args()
     fast = _fast_mode(args.fast)
     wait = _approval_wait_enabled(args.no_wait, fast)
     delay_scale = _resolve_delay_scale(fast=fast)
+    agent_name = args.agent_name
+    if agent_name is None:
+        agent_name = LIVE_AGENT_NAME if args.reuse_agent or not (args.all or args.runs) else _fresh_agent_name()
 
     if args.live:
         from agent import revmem_client
@@ -600,12 +661,16 @@ def main() -> None:
         if error:
             parser.error(error)
 
-        if args.runs:
+        if args.runs is not None:
+            if args.runs < 1:
+                parser.error("--runs must be >= 1")
             run_live_repeat(
                 args.runs,
                 wait=wait,
                 approval_timeout=args.approval_timeout,
                 approval_interval=args.approval_interval,
+                agent_name=agent_name,
+                debug=args.debug_agent,
             )
         elif args.all:
             run_live_all(
@@ -613,6 +678,8 @@ def main() -> None:
                 approval_timeout=args.approval_timeout,
                 approval_interval=args.approval_interval,
                 pause_between=not fast,
+                agent_name=agent_name,
+                debug=args.debug_agent,
             )
         else:
             session_num = int(args.session) if args.session else 3
@@ -623,18 +690,30 @@ def main() -> None:
                 wait=wait,
                 approval_timeout=args.approval_timeout,
                 approval_interval=args.approval_interval,
+                agent_name=agent_name,
+                debug=args.debug_agent,
             )
     else:
-        session_name = args.session or "s3"
-        if session_name not in SCAFFOLD_SCENARIOS:
-            parser.error(f"scaffold sessions: {', '.join(sorted(SCAFFOLD_SCENARIOS))}")
-        run_scaffold(
-            session_name,
-            wait=wait,
-            delay_scale=delay_scale,
-            approval_timeout=args.approval_timeout,
-            approval_interval=args.approval_interval,
-        )
+        if args.all:
+            for session_name in sorted(SCAFFOLD_SCENARIOS):
+                run_scaffold(
+                    session_name,
+                    wait=wait,
+                    delay_scale=delay_scale,
+                    approval_timeout=args.approval_timeout,
+                    approval_interval=args.approval_interval,
+                )
+        else:
+            session_name = args.session or "s3"
+            if session_name not in SCAFFOLD_SCENARIOS:
+                parser.error(f"scaffold sessions: {', '.join(sorted(SCAFFOLD_SCENARIOS))}")
+            run_scaffold(
+                session_name,
+                wait=wait,
+                delay_scale=delay_scale,
+                approval_timeout=args.approval_timeout,
+                approval_interval=args.approval_interval,
+            )
 
 
 if __name__ == "__main__":

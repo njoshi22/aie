@@ -28,6 +28,9 @@ def test_route_for_approval(client):
     r = client.post("/route_for_approval",
                     json={"amount_usd": 40000, "change_type": "schedule_change"})
     assert r.json()["route_to"] == "controller"
+    r = client.post("/route_for_approval",
+                    json={"amount_usd": 0, "change_type": "discount_over_authority"})
+    assert r.json()["route_to"] == "cfo_cco"
 
 
 def test_write_crm_denied_for_observer(client):
