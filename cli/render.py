@@ -158,6 +158,65 @@ def run_summary_table(results: list[dict]) -> Table:
     return table
 
 
+def learning_scorecard(summary: dict) -> Panel | None:
+    """Measured continual-learning panel from ``evals.scorecard.summarize_sessions``.
+
+    Returns None when fewer than 2 sessions were scored (nothing to compare), so
+    callers can simply skip rendering on mock/empty runs.
+    """
+    points = summary.get("curve", [])
+    if summary.get("n", 0) < 2:
+        return None
+
+    body = Text()
+    for p in points:
+        acc = p["accuracy"]
+        filled = int(round(max(0.0, min(1.0, acc)) * 16))
+        deal = str(p.get("deal") or "").upper()
+        body.append(f"S{p['session']} {deal:<7} ", style="bold")
+        body.append("#" * filled, style="green")
+        body.append("." * (16 - filled), style="grey37")
+        recall = ""
+        if p.get("material_total"):
+            recall = f"  recall {int(p['material_caught'])}/{int(p['material_total'])}"
+        fe = p.get("false_escalations")
+        body.append(f"  acc {acc:.2f}{recall}  false-esc {fe if fe is not None else '?'}\n")
+
+    deltas = summary.get("deltas", {})
+    first, last = summary["first"], summary["last"]
+    body.append("\n")
+
+    def _delta_line(label: str, a, b, value, good_down: bool = False) -> None:
+        body.append(f"{label:<18}", style="bold")
+        body.append(f"{a} -> {b}")
+        if value is None or value == 0:
+            body.append("\n", style="grey50")
+            return
+        good = (value < 0) if good_down else (value > 0)
+        sign = "+" if value > 0 else ""
+        body.append(f"   ({sign}{value})\n", style="green" if good else "red")
+
+    _delta_line("accuracy", f"{first['accuracy']:.2f}", f"{last['accuracy']:.2f}", deltas.get("accuracy"))
+    _delta_line(
+        "false escalations",
+        first.get("false_escalations", "?"),
+        last.get("false_escalations", "?"),
+        deltas.get("false_escalations"),
+        good_down=True,
+    )
+    if first.get("material_recall") is not None and last.get("material_recall") is not None:
+        _delta_line(
+            "material recall",
+            f"{first['material_recall']:.2f}",
+            f"{last['material_recall']:.2f}",
+            deltas.get("material_recall"),
+        )
+
+    improved = summary.get("improved")
+    title = "Continual learning - measured improvement" if improved else "Continual learning - scorecard"
+    return Panel(body, title=title, border_style="green" if improved else "grey50", box=ROUNDED)
+
+
 def divider(label: str = "") -> Text:
     """Horizontal divider with optional label."""
     text = Text()
