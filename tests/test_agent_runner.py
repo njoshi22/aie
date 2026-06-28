@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.runner import ToolCallRecord, _execute_tool, audit_decisions_for_tool_evidence
+from agent.runner import _execute_tool, audit_decisions_for_tool_evidence
+from agent.tool_types import ToolCallRecord
 from evals.gold import GoldItem
 from evals.grade import Decision, grade
 
@@ -13,11 +14,13 @@ def test_tool_call_record_shape() -> None:
         "name": "route_for_approval",
         "arguments": {"deal_id": "globex", "change_type": "schedule_change"},
         "result": {"approval_id": "appr-1", "route_to": "controller"},
+        "source": "pre_tool_hook",
     }
 
     assert record["name"] == "route_for_approval"
     assert record["arguments"]["deal_id"] == "globex"
     assert record["result"]["route_to"] == "controller"
+    assert record["source"] == "pre_tool_hook"
 
 
 def _gold_schedule() -> GoldItem:

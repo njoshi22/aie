@@ -15,6 +15,7 @@ from agent.templates.agents_md import AGENTS_MD
 from agent.templates.skill_md import generate_skill_md
 from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
 from agent.scenarios import SCENARIOS
+from agent.tool_types import JsonObject, ToolCallRecord
 from agent.tools import get_tools_for_tier
 from evals import behaviors
 from evals.gold import GoldItem, build_gold
@@ -27,13 +28,6 @@ from agent import revmem_client  # noqa: E402
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 AGENT_MODEL = "antigravity-preview-05-2026"
 AGENT_NAME = "RevOps Finance Agent"  # matches Person B's seed; resolved get-or-create by name
-JsonObject = dict[str, Any]
-
-
-class ToolCallRecord(TypedDict):
-    name: str
-    arguments: JsonObject
-    result: JsonObject
 
 
 class ScenarioExpected(TypedDict):
@@ -338,6 +332,7 @@ def run_session(
                 "name": tool_name,
                 "arguments": tool_args,
                 "result": tool_result,
+                "source": "model",
             })
             active_listener.on_tool_result(tool_name, tool_result)
 
