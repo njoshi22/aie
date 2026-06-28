@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import urllib.request
 from typing import Any
 
@@ -44,6 +45,9 @@ def read_outcomes_from_db(db_path: str | None = None, agent_id: str | None = Non
     conn = database.get_connection(path)
     try:
         sessions = database.list_sessions(conn, agent_id)
+    except sqlite3.OperationalError:
+        # Pointed at a file with no RevMem schema yet -> treat as "no sessions".
+        return []
     finally:
         conn.close()
     return _finished([s.model_dump(mode="json") for s in sessions])

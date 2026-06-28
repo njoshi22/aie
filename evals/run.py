@@ -56,22 +56,27 @@ def _cmd_live(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RevMem continual-learning evals")
-    parser.add_argument("--json-only", action="store_true", help="emit JSON instead of the Rich render")
+    # Shared so --json-only works both before and after the subcommand.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json-only", action="store_true", default=argparse.SUPPRESS,
+                        help="emit JSON instead of the Rich render")
+
+    parser = argparse.ArgumentParser(description="RevMem continual-learning evals", parents=[common])
     sub = parser.add_subparsers(dest="cmd")
 
-    p_curve = sub.add_parser("curve", help="modeled/graded learning curve (default)")
+    p_curve = sub.add_parser("curve", parents=[common], help="modeled/graded learning curve (default)")
     p_curve.add_argument("--out", type=Path, default=DEFAULT_OUT, help="where to write the JSON report")
 
-    sub.add_parser("retrieval", help="retrieval-quality eval (hit@k, MRR, relevance ablation)")
+    sub.add_parser("retrieval", parents=[common], help="retrieval-quality eval (hit@k, MRR, relevance ablation)")
 
-    p_live = sub.add_parser("live", help="learning curve from real persisted outcomes")
+    p_live = sub.add_parser("live", parents=[common], help="learning curve from real persisted outcomes")
     p_live.add_argument("--source", choices=["db", "api"], default="db")
     p_live.add_argument("--db", default=None, help="SQLite path (default: REVMEM_DB or db/revmem.db)")
     p_live.add_argument("--base-url", default=None, help="API base (default: REVMEM_BASE_URL)")
     p_live.add_argument("--agent", default=None, help="filter to one agent id")
 
     args = parser.parse_args()
+    args.json_only = getattr(args, "json_only", False)  # SUPPRESS -> set only when passed
     if args.cmd == "retrieval":
         _cmd_retrieval(args)
     elif args.cmd == "live":

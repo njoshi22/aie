@@ -177,7 +177,7 @@ def learning_scorecard(summary: dict) -> Panel | None:
         body.append("#" * filled, style="green")
         body.append("." * (16 - filled), style="grey37")
         recall = ""
-        if p.get("material_total"):
+        if p.get("material_total") and p.get("material_caught") is not None:
             recall = f"  recall {int(p['material_caught'])}/{int(p['material_total'])}"
         fe = p.get("false_escalations")
         body.append(f"  acc {acc:.2f}{recall}  false-esc {fe if fe is not None else '?'}\n")
