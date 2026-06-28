@@ -61,6 +61,7 @@ class RunnerListener(Protocol):
     def on_tool_call(self, name: str, arguments: JsonObject) -> None: ...
     def on_tool_result(self, name: str, result: JsonObject) -> None: ...
     def on_memory_retrieved(self, memories: list[JsonObject]) -> None: ...
+    def on_agent_delta(self, text: str) -> None: ...
     def on_agent_response(self, text: str) -> None: ...
     def on_approval_needed(self, approval: JsonObject) -> None: ...
     def on_graded(self, scorecard: object, graded_from_output: bool) -> None: ...
@@ -92,6 +93,9 @@ class _PrintListener:
                 print(f"    memory: {m.get('content', '')[:80]}")
         else:
             print("    (no memories found)")
+
+    def on_agent_delta(self, text: str) -> None:
+        print(text, end="", flush=True)
 
     def on_agent_response(self, text: str) -> None:
         print(f"\nAgent response:\n{text[:1500]}\n")
@@ -234,10 +238,42 @@ def _await_interaction(client, interaction, debug: bool):
     return interaction
 
 
+def _streaming_enabled() -> bool:
+    """Opt-in live event streaming. Background+poll stays the default when off."""
+    return os.getenv("REVMEM_STREAM", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _consume_interaction_stream(client, stream, listener: RunnerListener, debug: bool):
+    """Drive an interaction event stream, surfacing text/step deltas live, then return
+    the authoritative final Interaction via ``get`` once this turn's stream ends."""
+    interaction_id: str | None = None
+    for event in stream:
+        event_type = getattr(event, "event_type", None)
+        if event_type in ("interaction.created", "interaction.completed"):
+            interaction_id = getattr(getattr(event, "interaction", None), "id", None) or interaction_id
+        elif event_type == "interaction.status_update":
+            interaction_id = getattr(event, "interaction_id", None) or interaction_id
+            _debug(debug, f"[stream] status={getattr(event, 'status', '')}")
+        elif event_type == "step.start":
+            _debug(debug, f"[stream] step.start {getattr(getattr(event, 'step', None), 'type', '?')}")
+        elif event_type == "step.delta":
+            delta = getattr(event, "delta", None)
+            if delta is not None and getattr(delta, "type", None) == "text":
+                _notify(listener, "on_agent_delta", delta.text)
+        elif event_type == "error":
+            _debug(debug, f"[stream] error: {getattr(event, 'error', None)}")
+    if not interaction_id:
+        raise RuntimeError("interaction stream ended without an interaction id")
+    return client.interactions.get(interaction_id, timeout=AGENT_API_TIMEOUT_S)
+
+
 def _create_interaction(client, kwargs: dict, label: str, listener: RunnerListener, debug: bool):
     _notify(listener, "on_agent_api_start", label)
     started = time.perf_counter()
     try:
+        if _streaming_enabled():
+            stream = client.interactions.create(stream=True, timeout=AGENT_API_TIMEOUT_S, **kwargs)
+            return _consume_interaction_stream(client, stream, listener, debug)
         interaction = client.interactions.create(background=True, timeout=AGENT_API_TIMEOUT_S, **kwargs)
         return _await_interaction(client, interaction, debug)
     finally:
@@ -669,7 +705,12 @@ def main():
     parser.add_argument("--prev-interaction", type=str, default=None)
     parser.add_argument("--agent-name", default=AGENT_NAME, help="RevMem agent name to get or create")
     parser.add_argument("--debug", action="store_true", help="Print Interactions API step debugging")
+    parser.add_argument("--stream", action="store_true",
+                        help="Stream agent events live instead of background-polling (sets REVMEM_STREAM=1)")
     args = parser.parse_args()
+
+    if args.stream:
+        os.environ["REVMEM_STREAM"] = "1"
 
     result = run_session(
         args.session,

@@ -134,6 +134,61 @@ def test_create_interaction_polls_background_until_terminal(monkeypatch) -> None
     assert result.status == "requires_action"
 
 
+def test_streaming_mode_consumes_events_and_returns_final(monkeypatch) -> None:
+    """With REVMEM_STREAM on, _create_interaction streams (not background) and surfaces deltas."""
+    monkeypatch.setenv("REVMEM_STREAM", "1")
+
+    class _Ev:
+        def __init__(self, **kw: Any) -> None:
+            self.__dict__.update(kw)
+
+    class FinalInteraction:
+        status = "completed"
+        id = "v1_x"
+        output_text = "{}"
+        steps: list[object] = []
+        environment_id = "env-1"
+
+    events = [
+        _Ev(event_type="interaction.created", interaction=_Ev(id="v1_x")),
+        _Ev(event_type="step.delta", delta=_Ev(type="text", text="Hello ")),
+        _Ev(event_type="step.delta", delta=_Ev(type="text", text="world")),
+        _Ev(event_type="interaction.status_update", interaction_id="v1_x", status="completed"),
+    ]
+
+    class FakeInteractions:
+        def __init__(self) -> None:
+            self.create_kwargs: dict[str, object] = {}
+            self.get_id: str | None = None
+
+        def create(self, **kwargs: object) -> object:
+            self.create_kwargs = kwargs
+            return iter(events)
+
+        def get(self, id: str, **kwargs: object) -> FinalInteraction:
+            self.get_id = id
+            return FinalInteraction()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.interactions = FakeInteractions()
+
+    captured: list[str] = []
+
+    class StreamListener(_TimingListener):
+        def on_agent_delta(self, text: str) -> None:
+            captured.append(text)
+
+    client = FakeClient()
+    result = runner._create_interaction(client, {"agent": "m", "input": "p"}, "lbl", StreamListener(), debug=False)
+
+    assert client.interactions.create_kwargs.get("stream") is True
+    assert "background" not in client.interactions.create_kwargs  # streaming path, not background
+    assert client.interactions.get_id == "v1_x"  # authoritative final fetched after stream
+    assert result.status == "completed"
+    assert "".join(captured) == "Hello world"  # text deltas surfaced live
+
+
 def test_session_one_completion_payload_has_no_hardcoded_lesson() -> None:
     payload = runner._completion_payload(
         {"accuracy": 0.0},
