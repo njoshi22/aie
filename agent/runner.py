@@ -15,6 +15,7 @@ from agent.templates.agents_md import AGENTS_MD
 from agent.templates.skill_md import generate_skill_md
 from agent.prompts import build_reconciliation_prompt, build_cold_start_prompt
 from agent.scenarios import SCENARIOS
+from agent.tool_policy import ToolUseRequest, before_tool_use
 from agent.tool_types import JsonObject, ToolCallRecord
 from agent.tools import get_tools_for_tier
 from evals import behaviors
@@ -214,6 +215,20 @@ def _execute_tool(name: str, arguments: JsonObject, agent_id: str, session_id: s
     return {"error": f"Unknown tool: {name}", "skipped": True}
 
 
+class _RevMemApprovalClient:
+    def route_for_approval(
+        self,
+        deal_id: str,
+        amount_usd: float,
+        change_type: str,
+        **extra: object,
+    ) -> JsonObject:
+        return revmem_client.route_for_approval(deal_id, amount_usd, change_type, **extra)
+
+    def get_approval_status(self, approval_id: str) -> JsonObject:
+        return revmem_client.get_approval_status(approval_id)
+
+
 def _route_evidence_by_change_type(tool_calls: list[ToolCallRecord]) -> dict[tuple[str, str], JsonObject]:
     evidence: dict[tuple[str, str], JsonObject] = {}
     for call in tool_calls:
@@ -224,6 +239,15 @@ def _route_evidence_by_change_type(tool_calls: list[ToolCallRecord]) -> dict[tup
         if deal_id and change_type and call["result"].get("approval_id"):
             evidence[(deal_id, change_type)] = call["result"]
     return evidence
+
+
+def _approval_payload(arguments: JsonObject, result: JsonObject, source: str) -> JsonObject:
+    payload: JsonObject = dict(result)
+    for key in ("deal_id", "amount_usd", "change_type", "summary"):
+        if key in arguments:
+            payload[key] = arguments[key]
+    payload["source"] = source
+    return payload
 
 
 def audit_decisions_for_tool_evidence(
@@ -299,6 +323,7 @@ def run_session(
     for src in environment["sources"]:
         _ENV_FILES[src["target"]] = src["content"]
 
+    approval_client = _RevMemApprovalClient()
     create_interaction = cast(Any, client.interactions.create)
     interaction = create_interaction(
         agent=AGENT_MODEL,
@@ -324,10 +349,42 @@ def run_session(
         results = []
         for fc in fc_steps:
             tool_name = fc["name"]
-            tool_args = fc.get("arguments", {})
+            raw_tool_args = fc.get("arguments", {})
+            tool_args = raw_tool_args if isinstance(raw_tool_args, dict) else {}
             active_listener.on_tool_call(tool_name, tool_args)
 
-            tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
+            hook_decision = before_tool_use(
+                ToolUseRequest(
+                    name=tool_name,
+                    arguments=tool_args,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    tier=tier,
+                ),
+                approval_client,
+            )
+
+            for record in hook_decision.tool_records:
+                tool_calls_made.append(record)
+                active_listener.on_tool_call(record["name"], record["arguments"])
+                active_listener.on_tool_result(record["name"], record["result"])
+                if record["name"] == "route_for_approval" and record["result"].get("approval_id"):
+                    active_listener.on_approval_needed(
+                        _approval_payload(
+                            record["arguments"],
+                            record["result"],
+                            str(record.get("source", "pre_tool_hook")),
+                        )
+                    )
+
+            if hook_decision.allow:
+                tool_result = _execute_tool(tool_name, tool_args, agent_id, session_id)
+            else:
+                tool_result = hook_decision.result or {
+                    "error": f"{tool_name} blocked by pre-tool-use hook",
+                    "skipped": True,
+                }
+
             tool_calls_made.append({
                 "name": tool_name,
                 "arguments": tool_args,
@@ -342,7 +399,7 @@ def run_session(
                 active_listener.on_memory_retrieved(mems)
 
             if tool_name == "route_for_approval" and tool_result.get("approval_id"):
-                active_listener.on_approval_needed(tool_result)
+                active_listener.on_approval_needed(_approval_payload(tool_args, tool_result, "model"))
 
             results.append({
                 "type": "function_result",

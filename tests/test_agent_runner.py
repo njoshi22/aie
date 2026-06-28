@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from agent.runner import _execute_tool, audit_decisions_for_tool_evidence
 from agent.tool_types import ToolCallRecord
@@ -194,6 +194,129 @@ def test_run_session_submits_audited_outcome_when_route_tool_missing(monkeypatch
         "annual_schedule_usd: missing route_for_approval tool call",
         "discount_pct: missing route_for_approval tool call",
     ]
+
+
+def test_run_session_routes_approval_in_pre_tool_hook(monkeypatch) -> None:
+    from agent.runner import run_session
+    from core.models import PermissionTier
+
+    class FakeStep:
+        def __init__(self, data: dict[str, object]) -> None:
+            self._data = data
+
+        def to_dict(self) -> dict[str, object]:
+            return self._data
+
+    class FakeInteraction:
+        def __init__(
+            self,
+            status: str,
+            steps: list[FakeStep] | None = None,
+            output_text: str | None = None,
+        ) -> None:
+            self.status = status
+            self.steps = steps or []
+            self.output_text = output_text
+            self.id = f"interaction-{status}"
+            self.environment_id = "env-1"
+
+    class FakeInteractions:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.function_results: list[list[dict[str, Any]]] = []
+
+        def create(self, **kwargs: object) -> FakeInteraction:
+            self.calls += 1
+            payload = kwargs.get("input")
+            if isinstance(payload, list):
+                self.function_results.append(cast(list[dict[str, Any]], payload))
+            if self.calls == 1:
+                return FakeInteraction(
+                    "requires_action",
+                    steps=[
+                        FakeStep(
+                            {
+                                "type": "function_call",
+                                "id": "call-1",
+                                "name": "write_crm",
+                                "arguments": {
+                                    "deal_id": "globex",
+                                    "fields": {"annual_schedule_usd": [80000, 120000, 160000]},
+                                    "discrepancy": {
+                                        "deal_id": "globex",
+                                        "amount_usd": 40000.0,
+                                        "change_type": "schedule_change",
+                                    },
+                                },
+                            }
+                        )
+                    ],
+                )
+            return FakeInteraction(
+                "completed",
+                output_text=json.dumps(
+                    {
+                        "deal_id": "globex",
+                        "fields_compared": [
+                            {
+                                "field": "annual_schedule_usd",
+                                "match": False,
+                                "materiality": "material",
+                                "recommended_action": "escalate",
+                                "route_to": "controller",
+                            }
+                        ],
+                    }
+                ),
+            )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.interactions = FakeInteractions()
+
+    fake_client = FakeClient()
+    route_calls: list[tuple[str, float, str]] = []
+    write_calls: list[str] = []
+
+    def fake_route_for_approval(
+        deal_id: str,
+        amount_usd: float,
+        change_type: str,
+        **extra: object,
+    ) -> dict[str, object]:
+        route_calls.append((deal_id, amount_usd, change_type))
+        return {"approval_id": "appr-1", "route_to": "controller", "status": "pending"}
+
+    def fake_write_crm(**kwargs: object) -> dict[str, object]:
+        write_calls.append(str(kwargs.get("deal_id", "")))
+        return {"ok": True}
+
+    completed: list[dict[str, object]] = []
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr("agent.runner.genai.Client", lambda api_key: fake_client)
+    monkeypatch.setattr(
+        "agent.runner.revmem_client.ensure_agent",
+        lambda name: {
+            "id": "agent-1",
+            "permission_tier": PermissionTier.ANALYST,
+            "reputation_score": 0.35,
+        },
+    )
+    monkeypatch.setattr("agent.runner.revmem_client.start_session", lambda agent_id, task: {"id": "session-1"})
+    monkeypatch.setattr("agent.runner.revmem_client.route_for_approval", fake_route_for_approval)
+    monkeypatch.setattr("agent.runner.revmem_client.write_crm", fake_write_crm)
+    monkeypatch.setattr("agent.runner.revmem_client.complete_session", lambda session_id, outcome: completed.append(outcome) or {})
+
+    result = run_session(3)
+
+    assert route_calls == [("globex", 40000.0, "schedule_change")]
+    assert write_calls == []
+    assert result["tool_calls"][0]["name"] == "route_for_approval"
+    assert result["tool_calls"][0]["source"] == "pre_tool_hook"
+    assert result["tool_calls"][1]["name"] == "write_crm"
+    assert result["tool_calls"][1]["result"]["approval_required"] is True
+    assert fake_client.interactions.function_results[0][0]["result"]["approval_required"] is True
 
 
 def test_retrieve_context_returns_policy_to_agent(monkeypatch) -> None:
